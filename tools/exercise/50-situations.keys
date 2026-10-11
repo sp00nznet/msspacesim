@@ -1,0 +1,4 @@
+# Every shipped situation (.STN): start in it and watch it run -- each has
+# its own models, textures and caches to build.
+# seconds 30
+# situation *

@@ -80,6 +80,7 @@ def main():
     # because most 1994 cards needed a chipset-specific driver for more.
     ap.add_argument('--driver', default='svga8.drv', choices=('vga.drv', 'svga.drv', 'svga8.drv'))
     ap.add_argument('--chipset', type=int, default=0, help='0 = VESA 1.2, which src/vga.c answers')
+    ap.add_argument('--situation', default='FLIGHT', help='the .STN file to start in, without .STN')
     ap.add_argument('--sound', default='music', choices=('off', 'effects', 'music'))
     a = ap.parse_args()
 
@@ -92,6 +93,8 @@ def main():
             text = img[off:img.index(b'\0', off)].decode('ascii')
             if n == 0:
                 text = a.driver
+            if n == 2:
+                text = a.situation.upper()
             lines.append(text)
         else:
             val = bytearray(img[off:off + size])

@@ -131,6 +131,24 @@ With SETUP's chipset "VESA 1.2 Compatible" the drivers use VBE functions 01h,
 scans out at the mode's resolution. 800x600 is the default `tools/make_ini.py`
 writes.
 
+## 10. The launcher: a second program
+
+Music and sound effects are not in `SPACESIM.EXE`. `SS1.EXE`, a Microsoft C
+6 program, holds an AdLib player that stays resident while it runs the game;
+the game finds it through INT 2Fh (AX=4D52h returns a far entry point) and
+calls it with a function number in BX. With the player absent the game
+programs the PIT itself and stays silent.
+
+`tools/lift.py` lifts SS1 with the same pipeline (no BAO-specific rule is
+needed: the CS-pair rule finds the INT 2Fh handler and the entry it returns),
+loads it at `9600` instead of `0100`, and renames its symbols (`ss1_fn_...`,
+`g_ss1_funcs`) so it links into the game's exe. Two things only a C program
+asks of DOS turned up: `spawn` walks the MCB chain (an arena kept only in the
+host made it loop forever), and `system()` EXECs `COMMAND.COM /C`, which the
+EXEC model takes as "run the game". A miss inside SS1 stops the run: its C
+runtime does not survive a skipped routine, and the garbage that followed
+landed in the game's miss list.
+
 ## Debugging kit
 
 | | |

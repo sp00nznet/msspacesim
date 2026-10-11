@@ -21,6 +21,7 @@ import argparse
 import glob
 import os
 import subprocess
+import time
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -34,30 +35,48 @@ def misses():
 
 
 def script(path):
-    """(seconds, key list) from a .keys file: `# seconds N` and key lines
-    (`ms:KEY[+holdms]`, comma or newline separated)."""
-    secs, keys = 40, []
+    """(seconds, key list, situations) from a .keys file: `# seconds N`,
+    `# situation NAME...` (run once starting in each; `*` is every .STN the
+    game has) and key lines (`ms:KEY[+holdms]`, comma or newline separated)."""
+    secs, keys, sits = 40, [], [None]
     for line in open(path):
         line = line.strip()
         if line.startswith('# seconds'):
             secs = float(line.split()[2])
+        elif line.startswith('# situation'):
+            sits = line.split()[2:]
+            if sits == ['*']:
+                sits = sorted(os.path.basename(f)[:-4].upper()
+                              for f in glob.glob(os.path.join(ROOT, 'game', '*.[sS][tT][nN]')))
         elif line and not line.startswith('#'):
             keys += [k for k in line.split(',') if k]
-    return secs, ','.join(keys)
+    return secs, ','.join(keys), sits
 
 
 def play():
     """Every script at once: each run is its own process with its own copy of
     the machine, and each appends what it misses to the same list. They share
     game/ for reading; writes go to a folder per script."""
-    procs = []
+    runs = []
     for path in sorted(glob.glob(os.path.join(ROOT, 'tools', 'exercise', '*.keys'))):
-        secs, keys = script(path)
-        # its own folder for what it writes (the model caches it builds), so
-        # parallel runs never read each other's half-written files
-        save = os.path.join(ROOT, 'work', 'converge', os.path.basename(path)[:-5])
-        os.makedirs(save, exist_ok=True)
-        cmd = [EXE, '--headless', '--seconds', str(secs), '--save', save] + (['--keys', keys] if keys else [])
+        secs, keys, sits = script(path)
+        for sit in sits:
+            # its own folder for what it writes (the model caches it builds), so
+            # parallel runs never read each other's half-written files
+            name = os.path.basename(path)[:-5] + ('-' + sit if sit else '')
+            save = os.path.join(ROOT, 'work', 'converge', name)
+            os.makedirs(save, exist_ok=True)
+            if sit:
+                subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'make_ini.py'), '--situation', sit,
+                                '--out', os.path.join(save, 'SPACESIM.INI')], cwd=ROOT, check=True,
+                               capture_output=True)
+            runs.append([EXE, '--headless', '--seconds', str(secs), '--save', save]
+                        + (['--keys', keys] if keys else []))
+    # as many at once as there are cores
+    procs = []
+    for cmd in runs:
+        while len([p for p in procs if p.poll() is None]) >= (os.cpu_count() or 4):
+            time.sleep(0.2)
         procs.append(subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
     for p in procs:
         try:

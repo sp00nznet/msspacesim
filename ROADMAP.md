@@ -15,13 +15,13 @@
 What the sibling projects added on top (Gunman, SimCity 2000, Theme Park),
 brought here:
 
-- **A modern presenter**: Direct3D 11, resizable window, borderless
-  fullscreen, integer / sharp-bilinear / CRT scaling.
-- **Settings menu (F10)**, save states, speed control (the sim already has a
-  time scale; this is the host's pacing).
-- **Xbox controller**, mapped to the joystick the game already supports.
-- **Music and effects**: the AdLib music player is a TSR inside the
-  launcher `SS1.EXE`; lift it, or play its `.MDI` files natively.
+Done: the Direct3D 11 presenter, the F11 settings menu, save states, speed
+control, the Xbox controller (as keys), music and effects (SS1.EXE lifted).
+Still to come:
+
+- **Xbox controller as the joystick** the game supports (analog attitude),
+  instead of keys.
+- **Hi-res**: the 3D view drawn at the window's resolution.
 - **S10DATA**: the installer's `FINISH.BAT` says `s10ata`, so the tenth
   star system was never generated on a real install. Offer it as an option.
 - **Mods**: an overlay folder for situations, models and textures.

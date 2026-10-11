@@ -5,6 +5,10 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- The game's clock ran minutes ahead: timer 0's counter was out of phase with
+  IRQ 0, and the game adds the two together.
+
 ### Added
 - `tools/lift.py`: lifts `SPACESIM.EXE` and the 21 install-time data
   generators to C with pcrecomp. Finds BAO's hand-made far calls
@@ -35,6 +39,24 @@ versions follow [SemVer](https://semver.org/).
 - Divide faults reach the game's own INT 0 handler with the frame the CPU
   would push (the faulting CS:IP), so it can saturate the quotient and step
   over the instruction as it does on DOS.
+- A Direct3D 11 presenter (`src/present_d3d.c`, from the Theme Park recomp):
+  sharp-bilinear, smooth, CRT, nearest and integer scaling, vivid colour,
+  borderless fullscreen, GDI as the fallback.
+- A settings menu on F11 (save states, window size, scaling, speed, vivid
+  colour, fullscreen, mute, screenshot), F12 to cycle scaling, Shift+F12 for
+  a screenshot; choices kept in `settings.ini` beside the exe.
+- Save states (`src/state.c`): nine slots holding the whole machine, loaded
+  at the same place in the game they were saved. `SAVEn`/`LOADn` in `--keys`.
+- Speed control: the wall clock at 0.5x to 4x.
+- Music and sound effects: `SS1.EXE`, the launcher the player ran, is lifted
+  as a companion program linked into `spacesim.exe`. It installs Microsoft's
+  AdLib player and runs the game (INT 21h EXEC), and the game calls the
+  player for its music (`.MDI`) or engine sounds, as on DOS.
+  `tools/make_ini.py --sound music|effects|off` (music by default) and
+  `--situation NAME`.
+- The DOS model keeps memory control blocks in memory, answers EMS 47h/48h,
+  INT 21h 29h and EXEC, and knows which program's PSP is current.
+- `tools/exercise/50-situations.keys`: converge runs every shipped situation.
 - Debug builds (`-DSPACESIM_TRACE=ON`): `SPACESIM_SNAP`, `SPACESIM_WATCH`,
   `SPACESIM_CALLS`, a stack-depth guard naming runaway recursions.
 

@@ -22,18 +22,41 @@ harness as the other recomp repos).
 | Simulator: view window, star field, instrument panel, mission clock | ✅ renders and runs (seen headless) |
 | Expanded memory (EMS 4.0) | ✅ the game's 40 pages, bank switching |
 | Menus, dialogs, keyboard | ✅ menus, the Location dialogs (deep sky, stars, planets, comets, surface), Open Situation, Arrange Windows; scripted keys in headless runs |
-| 3D models | ✅ flat-shaded (an asteroid in the Alpha Centauri system, seen headless) |
-| Mouse / joystick in play | not yet verified |
-| Sound and music | not yet (the AdLib player is a separate TSR, `SS1.EXE`) |
+| 3D models, planets, surfaces | ✅ stations, spacecraft, Mars terrain, the Milky Way (every shipped situation runs headless) |
+| Keyboard, Xbox controller | ✅ arrows for attitude, keypad +/- for thrust; the pad is mapped to the same keys |
+| Mouse in play | not yet verified |
+| Music and sound effects | ✅ the game runs under `SS1.EXE` as it did on DOS, and SS1's own AdLib player (lifted too) plays the music, or the engine sounds |
 | Super VGA 640×400 and 800×600 | ✅ 800×600 by default: the driver files are lifted as variants of the driver region, over a VESA 1.2 model |
 | Lift | 1,157 functions, 58,299 instructions, 3 code segments |
 
-Nobody has played it with hands on a keyboard yet. Treat it as pre-alpha.
+On top of the original, as in the
+[Gunman](https://github.com/sp00nznet/gunman),
+[SimCity 2000](https://github.com/sp00nznet/simcity2000) and
+[Theme Park](https://github.com/sp00nznet/themepark-recomp) recomps:
+
+| | |
+|---|---|
+| Direct3D 11 presenter | sharp-bilinear (crisp at any size), smooth, CRT, nearest and integer scaling; vivid colour; resizable; borderless fullscreen |
+| Settings menu (F11) | save states, window size, scaling, speed, mute, screenshot; kept in `settings.ini` beside the exe |
+| Save states | 9 slots, the whole machine; a state loads where it was saved (in flight, from flight) |
+| Speed control | the game's clock at 0.5x, 1x, 2x or 4x real time (on top of its own time rate) |
+| Headless recording | `--headless --record out.mp4`: video and audio, deterministic, no window |
+
+It has been played headless and in a window on a virtual monitor; treat it as
+pre-alpha.
 
 ## Screenshots
 
-Not committed yet. Every frame so far comes from headless runs
-(`--headless --shot-at`), which is how they will be made.
+![The shuttle approach to the landing facility](docs/screenshots/hero.gif)
+
+| | |
+|---|---|
+| ![Title](docs/screenshots/title.png) | ![Mars base](docs/screenshots/mars-base.png) |
+| ![Alpha Centauri station](docs/screenshots/alpha-centauri.png) | ![Lunar module, 1972](docs/screenshots/lunar-module.png) |
+| ![Voyager at Jupiter](docs/screenshots/voyager-jupiter.png) | ![The Milky Way](docs/screenshots/milky-way.png) |
+
+All made headless (`--headless --shot-at`, `--record`) at 800x600; see
+[`tools/screens.py`](tools/screens.py).
 
 ## Getting Started
 
@@ -77,7 +100,8 @@ anything, so PATH is current.
    py -3 tools\lift.py all
    ```
    The first line should read `SPACESIM.EXE: ... 3 code segments, 1157 functions`
-   or close to it.
+   or close to it. `SS1.EXE`, the launcher with the music player, is lifted
+   too and linked into `spacesim.exe`.
 4. Build:
    ```
    cmake -B build -G "Visual Studio 17 2022" -A x64
@@ -94,7 +118,9 @@ anything, so PATH is current.
    ```
    py -3 tools\make_ini.py
    ```
-   and a two-line `game\SETUP.INI` (your name, then a product ID).
+   and a two-line `game\SETUP.INI` (your name, then a product ID). Defaults:
+   800x600, music on, starting in the `FLIGHT` situation; `--sound effects`,
+   `--sound off`, `--situation NAME` and `--driver vga.drv` change them.
 7. Play the scripted inputs in `tools\exercise\` headless, lifting and
    rebuilding until no new code turns up:
    ```
@@ -102,10 +128,26 @@ anything, so PATH is current.
    ```
    Some user-interface code is only named by pointers in data, so the lifter
    finds it when a run reaches it (`work\spacesim\misses.txt`, never
-   committed). Each pass prints how many new routines it found; it stops at 0.
+   committed). The runs include every shipped situation. Each pass prints how
+   many new routines it found; it stops at 0.
 8. Run `build\Release\spacesim.exe`.
 
 ## Usage
+
+| Key | |
+|---|---|
+| F11 | settings menu: save / load state, window size, scaling, speed, vivid colour, fullscreen, mute, screenshot |
+| F12 | next scaling mode (sharp, smooth, CRT, nearest, integer) |
+| Shift+F12 | screenshot to `screenshots\` |
+| Alt+Enter | fullscreen |
+| click in the picture | the mouse is the game's; Alt+Tab or F11 frees it |
+
+The game uses F1–F10 and the rest of the keyboard as it always did (arrows for
+yaw and pitch, keypad + and – for thrust, F1/F2 for the time rate, Alt for the
+menus).
+
+Xbox controller: left stick or d-pad = arrows, RT / LT = thrust up / down,
+RB / LB = F1 / F2, A = Enter, B or Start = Esc, X = Space, Back = Tab.
 
 ```
 spacesim [options]
@@ -113,7 +155,10 @@ spacesim [options]
   --record out.mp4    video + audio through ffmpeg
   --shot-at MS:FILE   frames at emulated times, e.g. 20000:title.bmp
   --seconds N         stop after N seconds of emulated time
-  --keys MS:KEY,...   scripted input
+  --keys MS:KEY,...   scripted input (SAVEn / LOADn for save states)
+  --display MODE      scaling: sharp, smooth, crt, nearest, integer
+  --fullscreen        start fullscreen
+  --no-ss1            run SPACESIM.EXE without its launcher (no music)
   --trace             DOS calls to stderr
 ```
 
