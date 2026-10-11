@@ -64,6 +64,18 @@ extern const char g_game_id[];
 extern const unsigned g_func_count;
 extern const RecompFunc g_funcs[];
 
+/* A second lifted program linked into the same exe (tools/lift.py
+ * COMPANIONS): SS1.EXE, the launcher whose music player the game calls.
+ * companion() is NULL unless src/companion_ss1.c is linked. */
+typedef struct {
+    const char *id;
+    const RecompFunc *funcs; unsigned n;
+    uint16_t load_seg, psp_seg, entry_cs, entry_ip, entry_ss, entry_sp;
+    const uint8_t *image; unsigned image_len;
+    const uint16_t (*relocs)[2]; unsigned nrelocs;
+} Program;
+const Program *companion(void);
+
 #if !defined(SPACESIM_SELFTEST) && !defined(SPACESIM_RUNTIME)   /* built without a lift */
 #include "recomp_all.h"
 #endif

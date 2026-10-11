@@ -185,12 +185,15 @@ int audio_port_in(uint16_t port, uint8_t *v)
     return 0;
 }
 
+/* What was last written to each OPL register, for save states */
+static uint8_t opl_regs[256], opl_index;
+
 int audio_port_out(uint16_t port, uint8_t v)
 {
     if (dma_port_out(port, v)) return 1;
     switch (port) {
-    case 0x388: case SB_BASE + 8: case SB_BASE: case SB_BASE + 2: opl_write(0, v); return 1;
-    case 0x389: case SB_BASE + 9: case SB_BASE + 1: case SB_BASE + 3: opl_write(1, v); return 1;
+    case 0x388: case SB_BASE + 8: case SB_BASE: case SB_BASE + 2: opl_index = v; opl_write(0, v); return 1;
+    case 0x389: case SB_BASE + 9: case SB_BASE + 1: case SB_BASE + 3: opl_regs[opl_index] = v; opl_write(1, v); return 1;
     case SB_BASE + 0x4: sb.mixer_i = v; return 1;
     case SB_BASE + 0x5: sb.mixer[sb.mixer_i] = v; return 1;
     case SB_BASE + 0x6:
@@ -216,7 +219,12 @@ void audio_advance(uint64_t pit_ticks)
     while (rendered < want) {
         int n = (int)((want - rendered) > 2048 ? 2048 : (want - rendered));
         for (int i = 0; i < n; i++) {
-            int s = opl_sample() + sb_sample();
+            /* The OPL2's output sits well off zero and is quiet beside a
+             * modern mix: a DC blocker, then twice the level. */
+            static double x1, y1;
+            double x = opl_sample(), y = x - x1 + 0.995 * y1;
+            x1 = x; y1 = y;
+            int s = (int)(y * 2) + sb_sample();
             if (spk_on) { spk_phase += spk_step; if (spk_phase >= 1) spk_phase -= 1; s += spk_phase < 0.5 ? 3000 : -3000; }
             if (g_opt.mute) s = 0;
             if (s > 32767) s = 32767; if (s < -32768) s = -32768;
@@ -228,3 +236,12 @@ void audio_advance(uint64_t pit_ticks)
 }
 
 void audio_shutdown(void) {}
+
+/* Save states: the OPL's registers, written back into the chip on a load
+ * (its envelopes restart; nobody hears the difference) */
+void audio_state(void)
+{
+    STATE(opl_regs); STATE(opl_index);
+    for (int r = 1; r < 256; r++) { opl_write(0, (uint8_t)r); opl_write(1, opl_regs[r]); }
+    opl_write(0, opl_index);
+}

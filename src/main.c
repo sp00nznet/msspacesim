@@ -12,9 +12,11 @@
  *   --seconds N       quit after N seconds of emulated time
  *   --keys LIST       scripted input: "ms:KEY[+holdms],..." e.g. "4000:ENTER,6000:ESC"
  *   --mute            silence
- *   --scale N         window size, multiples of 320x240 (default 3)
+ *   --scale N         window size, multiples of 320x240 (default: the largest that fits)
  *   --fullscreen      start fullscreen (Alt+Enter toggles)
- *   --display MODE    sharp (4:3, default), pixel (whole multiples) or crt (F11 cycles)
+ *   --display MODE    scaling: sharp (default), smooth, crt, nearest, integer (F12 cycles)
+ *   --gdi             scale with GDI, not Direct3D 11
+ *   --no-ss1          run SPACESIM.EXE directly, not through SS1.EXE (no music)
  *   --trace           log DOS calls to stderr
  *   --shot FILE.bmp   write the last frame at exit
  *   --shot-at LIST    frames at emulated times: "ms:file.bmp,..."
@@ -75,6 +77,8 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--fullscreen")) g_opt.fullscreen = 1;
         else if (!strcmp(a, "--realtime")) g_opt.realtime = 1;
         else if (!strcmp(a, "--display") && v) { g_opt.display = v; i++; }
+        else if (!strcmp(a, "--gdi")) g_opt.gdi = 1;
+        else if (!strcmp(a, "--no-ss1")) g_opt.no_ss1 = 1;
         else if (!strcmp(a, "--shot") && v) { shot = v; i++; }
         else if (!strcmp(a, "--")) {
             for (i++; i < argc; i++) {
@@ -94,6 +98,8 @@ int main(int argc, char **argv)
     g_opt.args = tail;
     mkdirs(g_opt.savedir);
 
+    char frame;
+    state_init(&frame);
     if (cpu_alloc_mem(&g_cpu) != 0) return 1;
     vga_init();
     audio_init();
@@ -103,9 +109,8 @@ int main(int argc, char **argv)
     vga_start();
 
     if (!setjmp(g_exit_jmp)) {
-        uint32_t entry = (uint32_t)g_entry_cs * 16 + g_entry_ip;
-        for (unsigned i = 0; i < g_func_count; i++)
-            if (g_funcs[i].addr == entry) { g_funcs[i].fn(&g_cpu); break; }
+        void dispatch_entry(CPU *cpu);
+        dispatch_entry(&g_cpu);
         fprintf(stderr, "[dos] the program returned without exiting\n");
     }
     machine_report();

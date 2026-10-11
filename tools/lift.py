@@ -41,6 +41,15 @@ GAMES = {'spacesim': ('', 'SPACESIM.EXE'), 'makedata': ('', 'MAKEDATA.EXE'),
          'makehmo': ('', 'MAKEHMO.EXE')}
 GAMES.update({f's{n:02d}data': ('', f'S{n:02d}DATA.EXE') for n in range(1, 20)})
 
+# SS1.EXE is the launcher the player actually ran: it loads Microsoft's AdLib
+# music and effects player (PLAY), then runs SPACESIM.EXE, which finds PLAY
+# through INT 2Fh and calls it for music and engine sounds. It is lifted as a
+# companion linked into spacesim.exe: its symbols carry a prefix so the two
+# programs' fn_XXXXX do not collide, and it loads at the top of conventional
+# memory, so the game still loads where its own lift says (src/dos.c, EXEC).
+COMPANIONS = {'ss1': ('SS1.EXE', 0x9600)}
+GAMES.update({k: ('', v[0]) for k, v in COMPANIONS.items()})
+
 # Where the program image goes in guest memory. DOS would put the PSP wherever
 # the last TSR ended; this is a clean machine, so it goes low, and the game gets
 # everything from just above the image to A000 for its heap. Baked into the
@@ -624,6 +633,9 @@ def driver_variants(src, im, codesegs0, work):
 
 
 def lift_one(game):
+    global PSP_SEG, LOAD_SEG
+    PSP_SEG = COMPANIONS[game][1] if game in COMPANIONS else 0x0100
+    LOAD_SEG = PSP_SEG + 0x10
     sub, exe = GAMES[game]
     src = os.path.join(ROOT, 'game', exe)
     if not os.path.exists(src):
@@ -815,8 +827,23 @@ def lift_one(game):
     if unhandled:
         print(f'  unhandled instruction forms: {sum(unhandled.values())} '
               f'({len(unhandled)} kinds), first: {list(unhandled)[:6]}')
+    if game in COMPANIONS:
+        prefix_symbols(out, game)
     changed = sync(out, final)
     print(f'  -> {final} ({len(files)} files, {changed} changed)')
+
+
+def prefix_symbols(out, game):
+    """A companion's functions, tables and image under its own names
+    (ss1_fn_XXXXX, g_ss1_funcs, ...), so it links beside the game."""
+    glob_names = r'\bg_(load_seg|psp_seg|entry_cs|entry_ip|entry_ss|entry_sp|game_id|func_count|funcs|' \
+                 r'drv_variants|drv_count|drv_lo|drv_len|drv_seg|image_len|nrelocs|relocs|image)\b'
+    for f in os.listdir(out):
+        path = os.path.join(out, f)
+        s = open(path).read()
+        s = re.sub(r'\b(fn|far)_([0-9A-F])', game + r'_\1_\2', s)
+        s = re.sub(glob_names, 'g_' + game + r'_\1', s)
+        open(path, 'w').write(s)
 
 
 def sync(src, dst):

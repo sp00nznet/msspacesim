@@ -1,6 +1,6 @@
 /*
- * host.c - the modern machine's side: a Win32 window (GDI, nearest-neighbour,
- * 4:3), waveOut audio, keyboard as raw PC scancodes -- or, with --headless,
+ * host.c - the modern machine's side: a Win32 window (Direct3D 11 scaling,
+ * a settings menu; see "window" below), waveOut audio, keyboard as raw PC scancodes -- or, with --headless,
  * none of that: frames are composed offscreen and, with --record, piped to
  * ffmpeg with the audio muxed in at the end. Headless never touches the
  * desktop, so it works over RDP and from CI (repo rules, section 13).
@@ -10,6 +10,7 @@
  */
 #include "machine.h"
 #include <ctype.h>
+#include <stdarg.h>
 #ifdef _WIN32
 #include <windows.h>
 #include <mmsystem.h>
@@ -19,13 +20,11 @@
 static uint32_t frame[FRAME_MAX];
 static uint32_t big[FRAME_MAX];
 static int fw = 320, fh = 200;
-static int scan_rows = 200;                     /* the CRT's rows behind the frame */
 static double frame_aspect = 4.0 / 3;
 
 static void compose(void)
 {
     vga_compose(frame, &fw, &fh);
-    scan_rows = fh;
     frame_aspect = 4.0 / 3;
 }
 
@@ -115,7 +114,7 @@ static void shots_due(uint64_t now)
 
 /* ---- scripted keys ----------------------------------------------------------- */
 
-typedef struct { uint64_t at; uint8_t sc; uint8_t up; } KeyEv;
+typedef struct { uint64_t at; uint8_t sc; uint8_t up; int8_t state; } KeyEv;   /* state: SAVEn / LOADn */
 static KeyEv kev[512];
 static int nkev, kev_i;
 
@@ -138,8 +137,14 @@ static void keys_parse(void)
         if (sscanf(p, "%lf:%31[^,]%n", &ms, name, &n) < 2) break;
         char *h = strchr(name, '+');            /* KEY+holdms */
         if (h) { *h = 0; hold = atoi(h + 1); }
-        int sc = key_by_name(name);
         uint64_t at = (uint64_t)(ms * PIT_HZ / 1000.0);
+        if (!_strnicmp(name, "SAVE", 4) || !_strnicmp(name, "LOAD", 4)) {
+            int slot = atoi(name + 4);
+            kev[nkev++] = (KeyEv){ at, 0, 0, (int8_t)(name[0] == 'S' || name[0] == 's' ? slot : -slot) };
+            p += n; if (*p == ',') p++;
+            continue;
+        }
+        int sc = key_by_name(name);
         kev[nkev++] = (KeyEv){ at, (uint8_t)sc, 0 };
         kev[nkev++] = (KeyEv){ at + (uint64_t)(hold * PIT_HZ / 1000.0), (uint8_t)sc, 1 };
         p += n; if (*p == ',') p++;
@@ -155,18 +160,228 @@ static void keys_due(void)
 {
     while (kev_i < nkev && kev[kev_i].at <= pit_now()) {
         int sc = kev[kev_i].sc;
+        if (kev[kev_i].state) { extern volatile int g_state_request; g_state_request = kev[kev_i].state; kev_i++; continue; }
         if (ext_of(sc)) kbd_scancode(0xE0);
         kbd_scancode((uint8_t)(sc | (kev[kev_i].up ? 0x80 : 0)));
         kev_i++;
     }
 }
 
+static char note[128];
+static uint32_t note_until;
+
+/* A line for the title bar (the window) or stderr (headless) */
+void host_note(const char *fmt, ...)
+{
+    va_list ap; va_start(ap, fmt); vsnprintf(note, sizeof note, fmt, ap); va_end(ap);
+#ifdef _WIN32
+    note_until = GetTickCount() + 3000;
+#endif
+    fprintf(stderr, "[host] %s\n", note);
+}
+
 /* ---- window ---------------------------------------------------------------- */
 
+/* The game uses F1-F10 and nearly every letter, so the window's own keys are
+ * the two it leaves alone:
+ *
+ *   F11              the settings menu: save states, window size, scaling,
+ *                    speed, vivid colour, fullscreen, mute, screenshot
+ *   F12              next scaling mode; Shift+F12 a screenshot
+ *   Alt+Enter        borderless fullscreen
+ *
+ * The picture is scaled by Direct3D 11 (present_d3d.c) or, without it, GDI.
+ * Choices are kept in settings.ini beside the exe. */
 #ifdef _WIN32
 static HWND wnd;
 static int quit_req;
 static int captured;
+static int cw, ch;
+static RECT dst;                                /* where the picture lands */
+static int scale = SCALE_SHARP, vivid, fullscreen, muted;
+static char ini_path[MAX_PATH];
+static WINDOWPLACEMENT saved_place = { sizeof saved_place };
+static const char *scale_names[SCALE_COUNT] = { "sharp", "smooth", "crt", "nearest", "integer" };
+static const double speeds[] = { 0.5, 1, 2, 4 };
+void state_path(int slot, char *out, size_t n);
+extern volatile int g_state_request;
+
+static void save_settings(void)
+{
+    char v[16];
+    WritePrivateProfileStringA("display", "scale", scale_names[scale], ini_path);
+    WritePrivateProfileStringA("display", "vivid", vivid ? "1" : "0", ini_path);
+    WritePrivateProfileStringA("display", "fullscreen", fullscreen ? "1" : "0", ini_path);
+    WritePrivateProfileStringA("sound", "mute", muted ? "1" : "0", ini_path);
+    snprintf(v, sizeof v, "%g", machine_speed());
+    WritePrivateProfileStringA("game", "speed", v, ini_path);
+}
+
+static void load_settings(void)
+{
+    char buf[32];
+    GetModuleFileNameA(NULL, ini_path, MAX_PATH);
+    strcpy(strrchr(ini_path, '\\') + 1, "settings.ini");
+    GetPrivateProfileStringA("display", "scale", "sharp", buf, sizeof buf, ini_path);
+    for (int i = 0; i < SCALE_COUNT; i++) if (!_stricmp(buf, scale_names[i])) scale = i;
+    vivid = GetPrivateProfileIntA("display", "vivid", 0, ini_path);
+    fullscreen = GetPrivateProfileIntA("display", "fullscreen", 0, ini_path);
+    muted = GetPrivateProfileIntA("sound", "mute", 0, ini_path);
+    GetPrivateProfileStringA("game", "speed", "1", buf, sizeof buf, ini_path);
+    if (atof(buf) > 0) machine_set_speed(atof(buf));
+    /* the command line wins over the file */
+    if (g_opt.display)
+        for (int i = 0; i < SCALE_COUNT; i++) if (!_stricmp(g_opt.display, scale_names[i])) scale = i;
+    if (g_opt.fullscreen) fullscreen = 1;
+    if (g_opt.mute) muted = 1;
+}
+
+static void layout(void)
+{
+    int w, h;
+    if (scale == SCALE_INTEGER) {                   /* whole multiples, square pixels */
+        int k = cw / fw < ch / fh ? cw / fw : ch / fh;
+        if (k < 1) k = 1;
+        w = fw * k; h = fh * k;
+    } else {                                        /* 4:3, as every mode was shown */
+        w = cw; h = (int)(cw / frame_aspect);
+        if (h > ch) { h = ch; w = (int)(ch * frame_aspect); }
+    }
+    dst.left = (cw - w) / 2; dst.top = (ch - h) / 2;
+    dst.right = dst.left + w; dst.bottom = dst.top + h;
+}
+
+static void set_title(void)
+{
+    static char last[192];
+    char t[192];
+    if (GetTickCount() < note_until) snprintf(t, sizeof t, "Microsoft Space Simulator - %s", note);
+    else if (!captured) snprintf(t, sizeof t, "Microsoft Space Simulator - F11 settings, click to use the mouse");
+    else snprintf(t, sizeof t, "Microsoft Space Simulator");
+    if (strcmp(t, last)) { strcpy(last, t); SetWindowTextA(wnd, t); }
+}
+
+static void apply_fullscreen(int on)
+{
+    DWORD st = GetWindowLong(wnd, GWL_STYLE);
+    if (on) {
+        MONITORINFO mi = { sizeof mi };
+        if (st & WS_OVERLAPPEDWINDOW) GetWindowPlacement(wnd, &saved_place);
+        GetMonitorInfo(MonitorFromWindow(wnd, MONITOR_DEFAULTTOPRIMARY), &mi);
+        SetWindowLong(wnd, GWL_STYLE, st & ~WS_OVERLAPPEDWINDOW);
+        SetWindowPos(wnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
+                     mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
+                     SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    } else if (!(st & WS_OVERLAPPEDWINDOW)) {
+        SetWindowLong(wnd, GWL_STYLE, st | WS_OVERLAPPEDWINDOW);
+        SetWindowPlacement(wnd, &saved_place);
+        SetWindowPos(wnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
+    fullscreen = on;
+}
+
+/* Window sizes in 320x240 steps that fit the work area, borders and all */
+static int max_window_k(void)
+{
+    RECT wa; SystemParametersInfo(SPI_GETWORKAREA, 0, &wa, 0);
+    int k = 8;
+    for (; k > 1; k--) {
+        RECT r = { 0, 0, 320 * k, 240 * k };
+        AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+        if (r.right - r.left <= wa.right - wa.left && r.bottom - r.top <= wa.bottom - wa.top) break;
+    }
+    return k;
+}
+
+static void size_window(int k)
+{
+    RECT r = { 0, 0, 320 * k, 240 * k }, wa;
+    if (fullscreen) apply_fullscreen(0);
+    ShowWindow(wnd, SW_RESTORE);
+    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+    SystemParametersInfo(SPI_GETWORKAREA, 0, &wa, 0);
+    SetWindowPos(wnd, NULL, wa.left + (wa.right - wa.left - (r.right - r.left)) / 2,
+                 wa.top + (wa.bottom - wa.top - (r.bottom - r.top)) / 2,
+                 r.right - r.left, r.bottom - r.top, SWP_NOZORDER);
+}
+
+/* Shift+F12: the current frame to screenshots\<game>-NNN.bmp */
+static void screenshot_key(void)
+{
+    char p[256];
+    CreateDirectoryA("screenshots", NULL);
+    for (int n = 0; n < 1000; n++) {
+        snprintf(p, sizeof p, "screenshots/%s-%03d.bmp", g_game_id, n);
+        if (GetFileAttributesA(p) == INVALID_FILE_ATTRIBUTES) { host_snapshot(p); host_note("%s", p); return; }
+    }
+}
+
+static void release_mouse(void)
+{
+    if (captured) { ClipCursor(NULL); ShowCursor(TRUE); captured = 0; mouse_host(0, 0, 0); }
+}
+
+/* F11: every setting in one native menu */
+static void settings_menu(void)
+{
+    enum { ID_SCALE = 100, ID_SPEED = 200, ID_VIVID = 300, ID_FULL, ID_MUTE, ID_SHOT,
+           ID_SIZE = 400, ID_SAVE = 500, ID_LOAD = 600 };
+    static const char *scale_labels[SCALE_COUNT] = {
+        "Sharp (crisp pixels, smooth edges)", "Smooth", "CRT", "Nearest", "Integer (whole multiples)" };
+    release_mouse();
+    HMENU m = CreatePopupMenu(), sc = CreatePopupMenu(), sp = CreatePopupMenu(), sz = CreatePopupMenu(),
+          sv = CreatePopupMenu(), ld = CreatePopupMenu();
+    for (int slot = 1; slot <= 9; slot++) {
+        char path[MAX_PATH], t[64];
+        WIN32_FILE_ATTRIBUTE_DATA a;
+        SYSTEMTIME u, lt;
+        int used;
+        state_path(slot, path, sizeof path);
+        if ((used = GetFileAttributesExA(path, GetFileExInfoStandard, &a)) != 0) {
+            FileTimeToSystemTime(&a.ftLastWriteTime, &u);
+            SystemTimeToTzSpecificLocalTime(NULL, &u, &lt);
+            snprintf(t, sizeof t, "Slot %d\t%04d-%02d-%02d %02d:%02d", slot, lt.wYear, lt.wMonth, lt.wDay, lt.wHour, lt.wMinute);
+        } else snprintf(t, sizeof t, "Slot %d\t(empty)", slot);
+        AppendMenuA(sv, MF_STRING, ID_SAVE + slot, t);
+        AppendMenuA(ld, MF_STRING | (used ? 0 : MF_GRAYED), ID_LOAD + slot, t);
+    }
+    for (int k = 2; k <= max_window_k(); k++) {
+        char t[48];
+        snprintf(t, sizeof t, "%d x %d", 320 * k, 240 * k);
+        AppendMenuA(sz, MF_STRING | (!fullscreen && cw == 320 * k && ch == 240 * k ? MF_CHECKED : 0), ID_SIZE + k, t);
+    }
+    for (int i = 0; i < SCALE_COUNT; i++)
+        AppendMenuA(sc, MF_STRING | (scale == i ? MF_CHECKED : 0), ID_SCALE + i, scale_labels[i]);
+    for (int i = 0; i < (int)(sizeof speeds / sizeof speeds[0]); i++) {
+        char t[32];
+        snprintf(t, sizeof t, "%gx%s", speeds[i], speeds[i] == 1 ? " (real time)" : "");
+        AppendMenuA(sp, MF_STRING | (machine_speed() == speeds[i] ? MF_CHECKED : 0), ID_SPEED + i, t);
+    }
+    AppendMenuA(m, MF_POPUP, (UINT_PTR)sv, "Save state");
+    AppendMenuA(m, MF_POPUP, (UINT_PTR)ld, "Load state");
+    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(m, MF_POPUP, (UINT_PTR)sz, "Window size");
+    AppendMenuA(m, MF_POPUP, (UINT_PTR)sc, "Scaling\tF12");
+    AppendMenuA(m, MF_POPUP, (UINT_PTR)sp, "Speed");
+    AppendMenuA(m, MF_STRING | (vivid ? MF_CHECKED : 0), ID_VIVID, "Vivid colour");
+    AppendMenuA(m, MF_STRING | (fullscreen ? MF_CHECKED : 0), ID_FULL, "Fullscreen\tAlt+Enter");
+    AppendMenuA(m, MF_STRING | (muted ? MF_CHECKED : 0), ID_MUTE, "Mute");
+    AppendMenuA(m, MF_STRING, ID_SHOT, "Screenshot\tShift+F12");
+    POINT p = { (dst.left + dst.right) / 2, (dst.top + dst.bottom) / 2 };
+    ClientToScreen(wnd, &p);
+    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, 0, wnd, NULL);
+    DestroyMenu(m);
+    if (cmd > ID_SAVE && cmd <= ID_SAVE + 9) g_state_request = cmd - ID_SAVE;
+    else if (cmd > ID_LOAD && cmd <= ID_LOAD + 9) g_state_request = -(cmd - ID_LOAD);
+    else if (cmd >= ID_SIZE && cmd < ID_SAVE) size_window(cmd - ID_SIZE);
+    else if (cmd >= ID_SCALE && cmd < ID_SCALE + SCALE_COUNT) { scale = cmd - ID_SCALE; layout(); }
+    else if (cmd >= ID_SPEED && cmd < ID_VIVID) { machine_set_speed(speeds[cmd - ID_SPEED]); host_note("speed %gx", machine_speed()); }
+    else if (cmd == ID_VIVID) vivid ^= 1;
+    else if (cmd == ID_FULL) apply_fullscreen(!fullscreen);
+    else if (cmd == ID_MUTE) muted ^= 1;
+    else if (cmd == ID_SHOT) screenshot_key();
+    if (cmd) save_settings();
+}
 
 static int mouse_buttons_now(void)
 {
@@ -174,110 +389,51 @@ static int mouse_buttons_now(void)
          | ((GetKeyState(VK_MBUTTON) < 0) ? 4 : 0);
 }
 
-void host_snapshot(const char *path);
-
-/* F12: the current frame to screenshots\<game>-NNN.bmp */
-static void screenshot_key(void)
+/* GDI: the fallback when Direct3D 11 is unavailable */
+static void gdi_paint(void)
 {
-    char p[256];
-    CreateDirectoryA("screenshots", NULL);
-    for (int n = 0; n < 1000; n++) {
-        snprintf(p, sizeof p, "screenshots/%s-%03d.bmp", g_game_id, n);
-        if (GetFileAttributesA(p) == INVALID_FILE_ATTRIBUTES) { host_snapshot(p); return; }
-    }
-}
-static BITMAPINFO bmi;
-
-static void toggle_fullscreen(void)
-{
-    static WINDOWPLACEMENT prev = { sizeof prev };
-    DWORD st = GetWindowLong(wnd, GWL_STYLE);
-    if (st & WS_OVERLAPPEDWINDOW) {
-        MONITORINFO mi = { sizeof mi };
-        GetWindowPlacement(wnd, &prev);
-        GetMonitorInfo(MonitorFromWindow(wnd, MONITOR_DEFAULTTOPRIMARY), &mi);
-        SetWindowLong(wnd, GWL_STYLE, st & ~WS_OVERLAPPEDWINDOW);
-        SetWindowPos(wnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
-                     mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
-                     SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-    } else {
-        SetWindowLong(wnd, GWL_STYLE, st | WS_OVERLAPPEDWINDOW);
-        SetWindowPlacement(wnd, &prev);
-        SetWindowPos(wnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-    }
+    HDC dc = GetDC(wnd);
+    BITMAPINFO bi = { { sizeof(BITMAPINFOHEADER), fw, -fh, 1, 32, BI_RGB } };
+    HBRUSH black = GetStockObject(BLACK_BRUSH);
+    RECT bars[4] = { { 0, 0, cw, dst.top }, { 0, dst.bottom, cw, ch },
+                     { 0, dst.top, dst.left, dst.bottom }, { dst.right, dst.top, cw, dst.bottom } };
+    for (int i = 0; i < 4; i++) FillRect(dc, &bars[i], black);
+    SetStretchBltMode(dc, scale == SCALE_SMOOTH ? HALFTONE : COLORONCOLOR);
+    StretchDIBits(dc, dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top,
+                  0, 0, fw, fh, frame, &bi, DIB_RGB_COLORS, SRCCOPY);
+    ReleaseDC(wnd, dc);
 }
 
-/* Display modes (F11 cycles, --display picks):
- *   sharp  4:3, nearest neighbour -- what a 1993 monitor's geometry was
- *   pixel  the largest whole multiple of the frame, square pixels (16:10)
- *   crt    4:3 with scanlines: every source row lit in its middle and dimmed
- *          at its edges, as an electron beam drew it                       */
-static const char *display_names[] = { "sharp", "pixel", "crt" };
-static int display_mode;
-static uint32_t *crt_buf;
-static size_t crt_cap;
-
-static void crt_compose(int w, int h)
+static void render(void)
 {
-    if ((size_t)w * h > crt_cap) {
-        free(crt_buf);
-        crt_cap = (size_t)w * h;
-        crt_buf = malloc(crt_cap * 4);
+    static int lw, lh;
+    if (fw != lw || fh != lh) { lw = fw; lh = fh; layout(); }
+    set_title();
+    if (g_opt.gdi || !d3d_present(wnd, frame, fw, fh, &dst, cw, ch, scale, vivid, 0)) {
+        g_opt.gdi = 1;
+        gdi_paint();
     }
-    for (int y = 0; y < h; y++) {
-        /* where in its source row this output line falls: 0..255 */
-        int pos = (int)(((int64_t)y * scan_rows * 256 / h) & 255);
-        int d = pos < 128 ? pos : 255 - pos;          /* 0 at the edges, 127 mid-row */
-        int gain = 150 + d * 106 / 127;               /* 150..256: edges ~60% bright */
-        const uint32_t *src = frame + (y * fh / h) * fw;
-        uint32_t *o = crt_buf + (size_t)y * w;
-        for (int x = 0; x < w; x++) {
-            uint32_t p = src[x * fw / w];
-            uint32_t r = ((p >> 16) & 255) * gain >> 8, g = ((p >> 8) & 255) * gain >> 8,
-                     b = (p & 255) * gain >> 8;
-            o[x] = 0xFF000000u | r << 16 | g << 8 | b;
-        }
-    }
-}
-
-static void paint(HDC dc)
-{
-    RECT r; GetClientRect(wnd, &r);
-    int cw = r.right, ch = r.bottom, w, h;
-    if (display_mode == 1) {                          /* pixel: whole multiples */
-        int k = cw / fw < ch / fh ? cw / fw : ch / fh;
-        if (k < 1) k = 1;
-        w = fw * k; h = fh * k;
-    } else {                                          /* sharp, crt: 4:3, or the widescreen's shape */
-        w = cw; h = (int)(cw / frame_aspect);
-        if (h > ch) { h = ch; w = (int)(ch * frame_aspect); }
-    }
-    int x = (cw - w) / 2, y = (ch - h) / 2;
-    PatBlt(dc, 0, 0, cw, y, BLACKNESS); PatBlt(dc, 0, y + h, cw, ch - y - h, BLACKNESS);
-    PatBlt(dc, 0, 0, x, ch, BLACKNESS); PatBlt(dc, x + w, 0, cw - x - w, ch, BLACKNESS);
-    if (display_mode == 2 && h >= scan_rows * 2) {
-        crt_compose(w, h);
-        bmi.bmiHeader.biWidth = w; bmi.bmiHeader.biHeight = -h;
-        SetDIBitsToDevice(dc, x, y, w, h, 0, 0, 0, h, crt_buf, &bmi, DIB_RGB_COLORS);
-        return;
-    }
-    bmi.bmiHeader.biWidth = fw; bmi.bmiHeader.biHeight = -fh;
-    SetStretchBltMode(dc, COLORONCOLOR);
-    StretchDIBits(dc, x, y, w, h, 0, 0, fw, fh, frame, &bmi, DIB_RGB_COLORS, SRCCOPY);
 }
 
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
     switch (m) {
     case WM_CLOSE: quit_req = 1; return 0;
-    case WM_PAINT: { PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); paint(dc); EndPaint(h, &ps); return 0; }
+    case WM_SIZE: cw = LOWORD(lp); ch = HIWORD(lp); layout(); return 0;
+    case WM_PAINT: ValidateRect(h, NULL); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_SYSKEYDOWN: case WM_KEYDOWN: case WM_SYSKEYUP: case WM_KEYUP: {
         int up = (m == WM_KEYUP || m == WM_SYSKEYUP);
-        if (wp == VK_RETURN && (lp & (1 << 29))) { if (!up) toggle_fullscreen(); return 0; }
+        if (wp == VK_RETURN && (lp & (1 << 29))) { if (!up) { apply_fullscreen(!fullscreen); save_settings(); } return 0; }
         if (wp == VK_F4 && (lp & (1 << 29))) { quit_req = 1; return 0; }
-        if (wp == VK_F12) { if (!up) screenshot_key(); return 0; }
-        if (wp == VK_F11) { if (!up) { display_mode = (display_mode + 1) % 3; InvalidateRect(h, NULL, FALSE); } return 0; }
+        if (wp == VK_F11) { if (!up) settings_menu(); return 0; }
+        if (wp == VK_F12) {
+            if (up) return 0;
+            if (GetKeyState(VK_SHIFT) < 0) { screenshot_key(); return 0; }
+            scale = (scale + 1) % SCALE_COUNT;
+            layout(); save_settings(); host_note("%s", scale_names[scale]);
+            return 0;
+        }
         if (!up && (lp & (1 << 30))) return 0;      /* the game does its own repeat */
         int sc = (lp >> 16) & 0xFF;
         if (lp & (1 << 24)) kbd_scancode(0xE0);
@@ -287,14 +443,15 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_SYSCHAR: return 0;                       /* no menu beep on Alt */
 
     /* Mouse: click in the window to capture it (the game turns with it when
-     * MOUSE ENABLED is on in its options); leaving the window releases it.
+     * MOUSE ENABLED is on in its options); losing focus or F11 releases it.
      * Raw input, so the motion is the device's, not the cursor's. */
     case WM_LBUTTONDOWN: case WM_RBUTTONDOWN: case WM_MBUTTONDOWN:
         if (!captured) {
             RAWINPUTDEVICE rid = { 1, 2, RIDEV_INPUTSINK, h };
-            RECT r; GetClientRect(h, &r); MapWindowPoints(h, NULL, (POINT *)&r, 2);
+            RECT r = dst; MapWindowPoints(h, NULL, (POINT *)&r, 2);
             RegisterRawInputDevices(&rid, 1, sizeof rid);
             ClipCursor(&r); ShowCursor(FALSE); captured = 1;
+            host_note("Alt+Tab or F11 frees the mouse");
             return 0;
         }
         /* fall through: a click while captured is a button for the game */
@@ -308,9 +465,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             mouse_host(ri.data.mouse.lLastX, ri.data.mouse.lLastY, mouse_buttons_now());
         break;
     }
-    case WM_KILLFOCUS:
-        if (captured) { ClipCursor(NULL); ShowCursor(TRUE); captured = 0; }
-        break;
+    case WM_KILLFOCUS: release_mouse(); break;
     }
     return DefWindowProcA(h, m, wp, lp);
 }
@@ -352,11 +507,12 @@ static void wave_push(const int16_t *s, int frames)
 #endif
 
 /* Gamepad: an XInput pad pressed as the keys the game already knows, so it
- * works in the menus and in play with no joystick calibration. The games'
- * own joystick support (port 201h) would want calibrating per session.
- *   stick / d-pad  arrows        RT  Ctrl (fire)     LT  Alt (strafe)
- *   A  Space (use)  X  Enter     RB  Right Shift (run)
- *   B / Start  Esc               Back  Tab                               */
+ * works in the menus and in flight with no joystick calibration (the game's
+ * own joystick, port 201h, would want calibrating each session).
+ *   stick / d-pad  arrows: yaw and pitch
+ *   RT / LT        keypad + / -: thrust up and down
+ *   RB / LB        F1 / F2: the time rate
+ *   A  Enter       B / Start  Esc       X  Space       Back  Tab        */
 typedef DWORD (WINAPI *XInputGetState_t)(DWORD, void *);
 
 static void pad_poll(void)
@@ -366,8 +522,8 @@ static void pad_poll(void)
     static uint32_t held;
     static const struct { uint32_t bit; uint8_t sc; uint8_t ext; } map[] = {
         {1 << 0, 0x48, 1}, {1 << 1, 0x50, 1}, {1 << 2, 0x4B, 1}, {1 << 3, 0x4D, 1},
-        {1 << 4, 0x1D, 0}, {1 << 5, 0x38, 0}, {1 << 6, 0x39, 0}, {1 << 7, 0x1C, 0},
-        {1 << 8, 0x36, 0}, {1 << 9, 0x01, 0}, {1 << 10, 0x0F, 0}};
+        {1 << 4, 0x4E, 0}, {1 << 5, 0x4A, 0}, {1 << 6, 0x1C, 0}, {1 << 7, 0x39, 0},
+        {1 << 8, 0x3B, 0}, {1 << 9, 0x01, 0}, {1 << 10, 0x0F, 0}, {1 << 11, 0x3C, 0}};
     struct { DWORD packet; WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry; } s;
 
     if (!tried) {
@@ -390,6 +546,7 @@ static void pad_poll(void)
     if (b & 0x1000) now |= 1 << 6;                       /* A */
     if (b & 0x4000) now |= 1 << 7;                       /* X */
     if (b & 0x0200) now |= 1 << 8;                       /* RB */
+    if (b & 0x0100) now |= 1 << 11;                      /* LB */
     if (b & (0x2000 | 0x0010)) now |= 1 << 9;            /* B, Start */
     if (b & 0x0020) now |= 1 << 10;                      /* Back */
 
@@ -408,7 +565,7 @@ void host_audio(const int16_t *s, int frames)
     if (rec_audio) { fwrite(s, 4, frames, rec_audio); rec_samples += frames; }
     if (wav_out) { fwrite(s, 4, frames, wav_out); wav_samples += frames; }
 #ifdef _WIN32
-    if (wout) wave_push(s, frames);
+    if (wout && !muted) wave_push(s, frames);
 #endif
 }
 
@@ -419,23 +576,21 @@ void host_init(void)
     if (g_opt.wav && (wav_out = fopen(g_opt.wav, "wb")) != NULL) wav_header(wav_out, 0);
 #ifdef _WIN32
     if (g_opt.headless) return;
+    SetProcessDPIAware();
+    load_settings();
     WNDCLASSA wc = {0};
     wc.lpfnWndProc = wndproc; wc.hInstance = GetModuleHandle(NULL);
     wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.lpszClassName = "spacesim";
     wc.hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(1));
     RegisterClassA(&wc);
-    int s = g_opt.scale ? g_opt.scale : 3;
-    RECT r = { 0, 0, 320 * s, 240 * s };
-    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
-    wnd = CreateWindowA("spacesim", "Microsoft Space Simulator",
-                        WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
-                        r.right - r.left, r.bottom - r.top, NULL, NULL, wc.hInstance, NULL);
-    bmi.bmiHeader.biSize = sizeof bmi.bmiHeader;
-    bmi.bmiHeader.biPlanes = 1; bmi.bmiHeader.biBitCount = 32; bmi.bmiHeader.biCompression = BI_RGB;
-    if (g_opt.fullscreen) toggle_fullscreen();
-    for (int i = 0; i < 3; i++)
-        if (g_opt.display && !strcmp(g_opt.display, display_names[i])) display_mode = i;
-    if (!g_opt.mute) wave_open();
+    wnd = CreateWindowA("spacesim", "Microsoft Space Simulator", WS_OVERLAPPEDWINDOW,
+                        CW_USEDEFAULT, CW_USEDEFAULT, 640, 480, NULL, NULL, wc.hInstance, NULL);
+    /* --scale, else the largest 320x240 multiple that fits (3x on 1080p) */
+    int k = g_opt.scale ? g_opt.scale : max_window_k(), fs = fullscreen;
+    size_window(k);
+    ShowWindow(wnd, SW_SHOW);
+    if (fs) apply_fullscreen(1);
+    wave_open();
 #endif
 }
 
@@ -460,14 +615,15 @@ void host_frame(void)
     }
 #ifdef _WIN32
     if (!wnd) return;
-    if (now - last_present < (uint64_t)(PIT_HZ / 70)) return;
-    last_present = now;
+    uint64_t t = host_us();                 /* 70 a second of real time, whatever the speed */
+    if (t - last_present < 1000000 / 70) return;
+    last_present = t;
     MSG msg;
     while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageA(&msg); }
     if (GetForegroundWindow() == wnd) pad_poll();
     if (quit_req) dos_exit(0);
     compose();
-    HDC dc = GetDC(wnd); paint(dc); ReleaseDC(wnd, dc);
+    render();
 #endif
 }
 

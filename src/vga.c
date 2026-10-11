@@ -390,3 +390,12 @@ void vga_report(void)
     FILE *f = d ? fopen(d, "wb") : NULL;
     if (f) { fwrite(vram, 1, sizeof vram, f); fwrite(dac, 1, sizeof dac, f); fclose(f); }
 }
+
+void vga_state(void)
+{
+    STATE(vram); STATE(latch); STATE(seq); STATE(gc); STATE(crtc); STATE(attr);
+    STATE(seq_i); STATE(gc_i); STATE(crtc_i); STATE(attr_i); STATE(attr_flip);
+    STATE(dac); STATE(dac_wi); STATE(dac_ri); STATE(dac_wc); STATE(dac_rc); STATE(dac_mask);
+    STATE(mode); STATE(svga); STATE(svga_mode); STATE(svga_w); STATE(svga_h);
+    STATE(svga_bank); STATE(svga_start); STATE(chain4); STATE(misc_out);
+}

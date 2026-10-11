@@ -20,6 +20,7 @@ void host_audio(const int16_t *s, int frames) { (void)s; (void)frames; }
 uint64_t pit_now(void) { return 0; }
 uint64_t emu_us(void) { return 0; }
 uint16_t bios_stub_seg(void) { return 0xF000; }
+void state_io(void *p, size_t n) { (void)p; (void)n; }
 
 static void out(uint16_t port, uint8_t v) { assert(vga_port_out(port, v) || audio_port_out(port, v)); }
 static uint8_t in(uint16_t port) { uint8_t v = 0; assert(vga_port_in(port, &v) || audio_port_in(port, &v)); return v; }

@@ -24,7 +24,9 @@ typedef struct {
     const char *args;         /* game command line tail */
     int scale;                /* window scale factor */
     int fullscreen;
-    const char *display;      /* sharp | pixel | crt */
+    const char *display;      /* scaling: sharp | smooth | crt | nearest | integer */
+    int gdi;                  /* --gdi: no Direct3D */
+    int no_ss1;               /* --no-ss1: boot the game, not its launcher */
     int realtime;             /* headless, but on the wall clock */
 } Options;
 extern Options g_opt;
@@ -57,6 +59,8 @@ int  machine_port_out(uint16_t port, uint8_t v);
 void call_vector(CPU *cpu, unsigned vec);    /* run whatever is in the IVT, as INT would */
 uint64_t pit_now(void);
 uint64_t emu_us(void);                /* see machine.c: wall clock, or deterministic */
+void machine_set_speed(double s);     /* windowed: the wall clock times s */
+double machine_speed(void);
 void machine_report(void);               /* emulated time in PIT ticks (1.193182 MHz) */
 #define PIT_HZ 1193182.0
 
@@ -81,6 +85,20 @@ void audio_speaker(int gate, uint16_t divisor);
 void audio_shutdown(void);
 
 /* host.c: window or offscreen, input, presentation, recording */
+/* present_d3d.c: scale w x h pixels (0x00RRGGBB) into rect r of a cw x ch
+ * client area (r is a RECT*, hw an HWND). Returns 0 without Direct3D 11. */
+enum { SCALE_SHARP, SCALE_SMOOTH, SCALE_CRT, SCALE_NEAREST, SCALE_INTEGER, SCALE_COUNT };
+int d3d_present(void *hw, const uint32_t *px, int w, int h, const void *r, int cw, int ch,
+                int mode, int look, int vsync);
+extern const char *snapshot_path;     /* the next d3d_present's back buffer to this BMP */
+
+/* state.c: save states. Each module's X_state() passes its variables
+ * through STATE(), which writes or reads them. */
+void state_io(void *p, size_t n);
+#define STATE(v) state_io(&(v), sizeof(v))
+void state_point(void);               /* a save or load happens here, if one is due */
+void state_init(void *main_frame);
+
 void host_init(void);
 void host_frame(void);                /* present + pump, at most once per refresh */
 void host_audio(const int16_t *stereo, int frames);

@@ -69,3 +69,5 @@ void drv_loaded(uint32_t a, uint32_t n)
     fprintf(stderr, "[drv] a 2D driver was loaded that tools/lift.py did not lift; "
                     "the built-in VGA driver's code will run in its place\n");
 }
+
+void drv_state(void) { STATE(active); }

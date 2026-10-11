@@ -24,6 +24,7 @@ Known fields (from what the game does with them):
        3 Tseng ET4000, 4 Trident 8900, 5 Paradise, 6 S3, 7 Cirrus 542X,
        8 Trident alternate
     3  the situation to start in (FLIGHT)
+    13 sound: 0 off, 1 effects, 2 music (SS1.EXE's player; see src/dos.c)
     last-but-one  the music file (danube.mdi)
 """
 import argparse
@@ -79,6 +80,7 @@ def main():
     # because most 1994 cards needed a chipset-specific driver for more.
     ap.add_argument('--driver', default='svga8.drv', choices=('vga.drv', 'svga.drv', 'svga8.drv'))
     ap.add_argument('--chipset', type=int, default=0, help='0 = VESA 1.2, which src/vga.c answers')
+    ap.add_argument('--sound', default='music', choices=('off', 'effects', 'music'))
     a = ap.parse_args()
 
     im = lift.Image(a.exe)
@@ -95,9 +97,11 @@ def main():
             val = bytearray(img[off:off + size])
             if n == 1:
                 val[0] = a.chipset & 0xFF
+            if n == 12:
+                val[0] = ('off', 'effects', 'music').index(a.sound)
             lines.extend(f'{v:02X}' for v in val)           # one byte per line, as the game writes
     open(a.out, 'wb').write(('\r\n'.join(lines) + '\r\n').encode('ascii'))
-    print(f'{a.out}: {len(fields)} fields, driver {a.driver}, chipset {a.chipset}')
+    print(f'{a.out}: {len(fields)} fields, driver {a.driver}, chipset {a.chipset}, sound {a.sound}')
 
 
 if __name__ == '__main__':

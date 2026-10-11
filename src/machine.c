@@ -67,6 +67,11 @@ static int      t0_pending;
 static uint16_t pit_count(int ch)
 {
     uint64_t period = pit_div[ch];
+    /* Timer 0 counts down to the next IRQ 0, so a reading and the tick count
+     * the game's handler keeps never disagree: the game adds the two up for
+     * its clock, and a counter out of phase with the IRQ made that clock step
+     * back and then leap by whole minutes. */
+    if (ch == 0) return (uint16_t)(next_t0 > emu_now ? (next_t0 - emu_now < period ? next_t0 - emu_now : period) : 1);
     return (uint16_t)(period - (emu_now % period));
 }
 
@@ -181,15 +186,37 @@ void port_out16(CPU *cpu, uint16_t port, uint16_t v)
 
 /* ---- dispatch ----------------------------------------------------------- */
 
-static void (*lookup(uint16_t seg, uint16_t off))(CPU *)
+static void (*find_in(const RecompFunc *t, unsigned n, uint16_t load, uint16_t seg, uint16_t off))(CPU *)
 {
-    int32_t lin = ((int32_t)seg - (int32_t)g_load_seg) * 16 + off;
-    unsigned lo = 0, hi = g_func_count;
+    int32_t lin = ((int32_t)seg - (int32_t)load) * 16 + off;
+    unsigned lo = 0, hi = n;
     while (lo < hi) {
         unsigned mid = (lo + hi) / 2;
-        if ((int32_t)g_funcs[mid].addr < lin) lo = mid + 1; else hi = mid;
+        if ((int32_t)t[mid].addr < lin) lo = mid + 1; else hi = mid;
     }
-    return (lo < g_func_count && (int32_t)g_funcs[lo].addr == lin) ? g_funcs[lo].fn : NULL;
+    return (lo < n && (int32_t)t[lo].addr == lin) ? t[lo].fn : NULL;
+}
+
+/* The program an address belongs to: the companion (SS1.EXE) sits above the
+ * game's memory, so anything from its load segment up is its. */
+static const Program *owner(uint16_t seg)
+{
+    const Program *p = companion();
+    return p && seg >= p->load_seg && !g_opt.no_ss1 ? p : NULL;
+}
+
+static void (*lookup(uint16_t seg, uint16_t off))(CPU *)
+{
+    const Program *p = owner(seg);
+    if (p) return find_in(p->funcs, p->n, p->load_seg, seg, off);
+    return find_in(g_funcs, g_func_count, g_load_seg, seg, off);
+}
+
+void dispatch_entry(CPU *cpu)
+{
+    void (*fn)(CPU *) = lookup(cpu->cs, cpu->ip);
+    if (fn) fn(cpu);
+    else fprintf(stderr, "[dos] no lifted entry point at %04X:%04X\n", cpu->cs, cpu->ip);
 }
 
 /* An address the guest jumped to that has no lifted function. Recorded so the
@@ -201,14 +228,20 @@ static void miss(const char *how, uint16_t seg, uint16_t off)
     uint32_t key = (uint32_t)seg << 16 | off;
     for (int i = 0; i < nseen; i++) if (seen[i] == key) return;
     if (nseen < 512) seen[nseen++] = key;
-    {   int drv_miss(uint32_t lin);          /* a Super VGA driver's own: drv.c */
+    const Program *prog = owner(seg);
+    if (!prog) {   int drv_miss(uint32_t lin);          /* a Super VGA driver's own: drv.c */
         if (drv_miss((uint32_t)(((int32_t)seg - g_load_seg) * 16 + off))) return; }
-    fprintf(stderr, "[miss] %s %04X:%04X (image %05X)\n", how, seg, off,
-            (unsigned)(((int32_t)seg - g_load_seg) * 16 + off));
+    uint16_t load = prog ? prog->load_seg : g_load_seg;
+    fprintf(stderr, "[miss] %s%s %04X:%04X (image %05X)\n", prog ? "ss1 " : "", how, seg, off,
+            (unsigned)(((int32_t)seg - load) * 16 + off));
     { void host_backtrace(void); host_backtrace(); }
-    char p[256]; snprintf(p, sizeof p, "work/%s/misses.txt", g_game_id);
+    char p[256]; snprintf(p, sizeof p, "work/%s/misses.txt", prog ? prog->id : g_game_id);
     FILE *f = fopen(p, "a");
     if (f) { fprintf(f, "%04X:%04X\n", seg, off); fclose(f); }
+    /* SS1's C runtime does not survive a skipped routine: what it does next
+     * is garbage, and garbage misses would land in the game's list. Stop;
+     * the next lift has it (tools/converge.py relifts and runs again). */
+    if (prog) { fprintf(stderr, "[miss] stopping: run tools/lift.py ss1 and rebuild\n"); dos_exit(3); }
 }
 
 /* `jmp far [old]` / `pushf; call far [old]` into the BIOS: chain to the
@@ -303,10 +336,25 @@ void sb_irq_ack(void);
 #define POLL_US 300
 static uint64_t virt_us, polls;
 
+/* The speed control (the settings menu) runs the wall clock faster or
+ * slower from the moment it changes, so emulated time never jumps. */
+static double speed = 1.0;
+static uint64_t speed_emu;                /* emulated us when the speed last changed */
+
 uint64_t emu_us(void)
 {
-    return g_opt.headless && !g_opt.realtime ? virt_us : host_us() - t_start;
+    if (g_opt.headless && !g_opt.realtime) return virt_us;
+    return speed_emu + (uint64_t)((host_us() - t_start) * speed);
 }
+
+void machine_set_speed(double s)
+{
+    speed_emu = emu_us();
+    t_start = host_us();
+    speed = s;
+}
+
+double machine_speed(void) { return speed; }
 
 void machine_report(void)
 {
@@ -535,3 +583,11 @@ void vgaprof_report(void)
 #else
 void vgaprof_report(void) {}
 #endif
+
+/* Save states: the PIC and the PIT's programming. Not the time: it runs on. */
+void machine_state(void)
+{
+    STATE(pic_mask); STATE(in_irq); STATE(pit_div); STATE(pit_mode_access);
+    STATE(pit_flip); STATE(pit_latch); STATE(pit_latched); STATE(port61);
+    kq_head = kq_tail = 0;
+}

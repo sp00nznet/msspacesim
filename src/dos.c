@@ -39,7 +39,34 @@ uint16_t bios_stub_seg(void) { return STUB_SEG; }
 
 typedef struct { uint16_t seg, paras, owner; } Block;   /* seg = first usable paragraph */
 static Block arena[64];
+static uint16_t cur_psp = 0x0100;           /* the running program's PSP */
 static int narena;
+
+/* The arena as DOS keeps it in memory: a chain of memory control blocks, one
+ * paragraph before each block, free space included. Nothing in the game
+ * reads them, but Microsoft C's spawn() (SS1.EXE running the game) walks the
+ * chain to see what it may use. Rewritten after every change. */
+static void write_mcb(unsigned at, char kind, uint16_t owner, unsigned paras)
+{
+    uint8_t *p = g_cpu.mem + at * 16;
+    p[0] = (uint8_t)kind;
+    p[1] = (uint8_t)owner; p[2] = (uint8_t)(owner >> 8);
+    p[3] = (uint8_t)paras; p[4] = (uint8_t)(paras >> 8);
+}
+
+static void arena_mcbs(void)
+{
+    unsigned at = 0x0060, last = 0;
+    for (int i = 0; i <= narena; i++) {
+        unsigned next = i < narena ? arena[i].seg - 1u : MEM_TOP;
+        if (next > at) { write_mcb(at, 'M', 0, next - at - 1); last = at; at = next; }   /* free */
+        if (i == narena || at != arena[i].seg - 1u) continue;
+        write_mcb(at, 'M', arena[i].owner, arena[i].paras);
+        last = at;
+        at = arena[i].seg + arena[i].paras;
+    }
+    g_cpu.mem[last * 16] = 'Z';
+}
 
 static void arena_sort(void)
 {
@@ -47,6 +74,7 @@ static void arena_sort(void)
         for (int j = i; j > 0 && arena[j].seg < arena[j - 1].seg; j--) {
             Block t = arena[j]; arena[j] = arena[j - 1]; arena[j - 1] = t;
         }
+    arena_mcbs();
 }
 
 /* room above a block before the next one's MCB (1 paragraph) or the top */
@@ -81,7 +109,7 @@ static int arena_alloc(uint16_t paras, uint16_t *seg)
         if (hi > lo + 1 && hi - lo - 1 >= paras) {
             arena[narena].seg = (uint16_t)(lo + 1);
             arena[narena].paras = paras;
-            arena[narena].owner = g_psp_seg;
+            arena[narena].owner = cur_psp;
             *seg = (uint16_t)(lo + 1);
             narena++; arena_sort();
             return 1;
@@ -96,6 +124,8 @@ static int arena_alloc(uint16_t paras, uint16_t *seg)
 #define MAXH 40
 static FILE *fh[MAXH];
 static uint8_t is_dev[MAXH];             /* a character device: the EMS driver's EMMXXXX0 */
+static char fname[MAXH][80];             /* what each handle opened, for save states */
+static uint8_t fmode[MAXH];
 
 static void read_asciiz(uint16_t seg, uint16_t off, char *out, int n)
 {
@@ -291,8 +321,77 @@ extern const unsigned g_image_len, g_nrelocs;
 extern const uint16_t g_relocs[][2];
 extern const uint8_t g_image[];
 
+/* The game itself, in the same shape as a companion */
+static Program main_program;
+
+/* A PSP, the image and its relocations, as the DOS loader does; the block
+ * runs from the PSP up to top. Registers are set for the program's entry. */
+static void load_program(CPU *cpu, const Program *p, unsigned top)
+{
+    uint8_t *m = cpu->mem;
+    uint8_t *psp = m + p->psp_seg * 16;
+    memset(psp, 0, 0x100);
+    cur_psp = p->psp_seg;
+    psp[0] = 0xCD; psp[1] = 0x20;
+    psp[2] = top & 0xFF; psp[3] = (uint8_t)(top >> 8);
+    psp[0x2C] = ENV_SEG & 0xFF; psp[0x2D] = ENV_SEG >> 8;
+    {
+        const char *a = g_opt.args ? g_opt.args : "";
+        int n = (int)strlen(a);
+        if (n > 125) n = 125;
+        psp[0x80] = (uint8_t)(n ? n + 1 : 0);
+        if (n) { psp[0x81] = ' '; memcpy(psp + 0x82, a, n); }
+        psp[0x81 + (n ? n + 1 : 0)] = 0x0D;
+    }
+    arena[narena++] = (Block){ p->psp_seg, (uint16_t)(top - p->psp_seg), p->psp_seg };
+    arena_sort();
+
+    memcpy(m + p->load_seg * 16, p->image, p->image_len);
+    for (unsigned i = 0; i < p->nrelocs; i++) {
+        uint32_t a = (uint32_t)(p->load_seg + p->relocs[i][1]) * 16 + p->relocs[i][0];
+        uint16_t w = (uint16_t)((m[a] | m[a + 1] << 8) + p->load_seg);
+        m[a] = (uint8_t)w; m[a + 1] = (uint8_t)(w >> 8);
+    }
+
+    cpu->cs = (uint16_t)(p->load_seg + p->entry_cs); cpu->ip = p->entry_ip;
+    cpu->ss = (uint16_t)(p->load_seg + p->entry_ss); cpu->sp = p->entry_sp;
+    cpu->ds = cpu->es = p->psp_seg;
+    cpu->flags = 0x0202;
+    dta_seg = p->psp_seg; dta_off = 0x80;
+}
+
+/* INT 21h 4B00h from SS1.EXE: run SPACESIM.EXE in the space SS1 left below
+ * itself, which is where the game's own lift put it. The game never returns:
+ * its exit ends the run, and SS1's clean-up (unhooking its interrupts) is
+ * not needed by anyone. */
+static int exec_game(CPU *c, const char *name)
+{
+    /* SS1 uses system(): COMMAND.COM /C SPACESIM.EXE */
+    char tail[128] = "";
+    uint32_t pb = seg_off(c->es, c->bx);
+    uint16_t to = (uint16_t)(c->mem[pb + 2] | c->mem[pb + 3] << 8), ts = (uint16_t)(c->mem[pb + 4] | c->mem[pb + 5] << 8);
+    for (int k = 0, n = c->mem[seg_off(ts, to)]; k < n && k < 127; k++) tail[k] = (char)toupper(c->mem[seg_off(ts, (uint16_t)(to + 1 + k))]);
+    if (_stricmp(base_name(name), "SPACESIM.EXE") &&
+        !(!_stricmp(base_name(name), "COMMAND.COM") && strstr(tail, "SPACESIM"))) return 0;
+    int i = arena_find(main_program.psp_seg);
+    if (i >= 0 || !companion()) return 0;
+    unsigned top = MEM_TOP;
+    for (int k = 0; k < narena; k++)
+        if (arena[k].seg > main_program.psp_seg && arena[k].seg - 1u < top) top = arena[k].seg - 1u;
+    load_program(c, &main_program, top);
+    trace("[dos] exec %s: PSP %04X, %04X paragraphs\n", name, main_program.psp_seg, top - main_program.psp_seg);
+    uint32_t entry = (uint32_t)main_program.entry_cs * 16 + main_program.entry_ip;
+    for (unsigned k = 0; k < g_func_count; k++)
+        if (g_funcs[k].addr == entry) { g_funcs[k].fn(c); break; }
+    dos_exit(0);
+    return 1;
+}
+
 void dos_boot(CPU *cpu)
 {
+    main_program = (Program){ "spacesim", g_funcs, g_func_count, g_load_seg, g_psp_seg,
+                              g_entry_cs, g_entry_ip, g_entry_ss, g_entry_sp,
+                              g_image, g_image_len, g_relocs, g_nrelocs };
     uint8_t *m = cpu->mem;
     /* IVT: every vector into the stub segment, offset = vector number */
     for (int i = 0; i < 256; i++) {
@@ -318,35 +417,14 @@ void dos_boot(CPU *cpu)
     }
     arena[narena++] = (Block){ ENV_SEG, 0x1F, g_psp_seg };
 
-    /* PSP */
-    uint8_t *psp = m + g_psp_seg * 16;
-    psp[0] = 0xCD; psp[1] = 0x20;
-    psp[2] = MEM_TOP & 0xFF; psp[3] = MEM_TOP >> 8;
-    psp[0x2C] = ENV_SEG & 0xFF; psp[0x2D] = ENV_SEG >> 8;
-    {
-        const char *a = g_opt.args ? g_opt.args : "";
-        int n = (int)strlen(a);
-        if (n > 125) n = 125;
-        psp[0x80] = (uint8_t)(n ? n + 1 : 0);
-        if (n) { psp[0x81] = ' '; memcpy(psp + 0x82, a, n); }
-        psp[0x81 + (n ? n + 1 : 0)] = 0x0D;
-    }
-    arena[narena++] = (Block){ g_psp_seg, (uint16_t)(MEM_TOP - g_psp_seg), g_psp_seg };
-    arena_sort();
-
-    /* image + relocations, as the DOS loader does */
-    memcpy(m + g_load_seg * 16, g_image, g_image_len);
-    for (unsigned i = 0; i < g_nrelocs; i++) {
-        uint32_t a = (uint32_t)(g_load_seg + g_relocs[i][1]) * 16 + g_relocs[i][0];
-        uint16_t w = (uint16_t)((m[a] | m[a + 1] << 8) + g_load_seg);
-        m[a] = (uint8_t)w; m[a + 1] = (uint8_t)(w >> 8);
-    }
-
-    cpu->cs = (uint16_t)(g_load_seg + g_entry_cs); cpu->ip = g_entry_ip;
-    cpu->ss = (uint16_t)(g_load_seg + g_entry_ss); cpu->sp = g_entry_sp;
-    cpu->ds = cpu->es = g_psp_seg;
-    cpu->flags = 0x0202;
-    dta_seg = g_psp_seg; dta_off = 0x80;
+    /* SS1.EXE first, as the player ran it, when it is linked in: it loads
+     * the music player and then runs the game (INT 21h 4Bh, below). */
+    const Program *p = companion();
+    if (p && !g_opt.no_ss1) {
+        load_program(cpu, p, MEM_TOP);
+        trace("[dos] booting %s, which runs the game\n", p->id);
+    } else
+        load_program(cpu, &main_program, MEM_TOP);
 }
 
 void dos_exit(int code)
@@ -417,6 +495,7 @@ void dos_int21(CPU *c)
         read_asciiz(c->ds, c->dx, name, sizeof name);
         FILE *f = open_game(name, 1, 1);
         int h = f ? new_handle(f) : -1;
+        if (h >= 0) { snprintf(fname[h], sizeof fname[h], "%s", name); fmode[h] = 2; }
         trace("[dos] create %s -> %d\n", name, h);
         if (h < 0) { fail(c, 3); break; }
         c->ax = (uint16_t)h; CF_CLR(c); break;
@@ -426,7 +505,7 @@ void dos_int21(CPU *c)
         int dev = !_stricmp(base_name(name), "EMMXXXX0");   /* how EMS is found: ems.c */
         FILE *f = dev ? fopen("NUL", "rb") : open_game(name, c->al & 3, 0);
         int h = f ? new_handle(f) : -1;
-        if (h >= 0) is_dev[h] = (uint8_t)dev;
+        if (h >= 0) { is_dev[h] = (uint8_t)dev; snprintf(fname[h], sizeof fname[h], "%s", name); fmode[h] = c->al & 3; }
         trace("[dos] open %s mode %d -> %d\n", name, c->al & 3, h);
         {   /* SPACESIM_BT_OPEN=<substring>: who opens this file (debug builds) */
             const char *w = getenv("SPACESIM_BT_OPEN");
@@ -437,7 +516,7 @@ void dos_int21(CPU *c)
         c->ax = (uint16_t)h; CF_CLR(c); break;
     }
     case 0x3E:
-        if (c->bx < MAXH && fh[c->bx]) { fclose(fh[c->bx]); fh[c->bx] = NULL; is_dev[c->bx] = 0; }
+        if (c->bx < MAXH && fh[c->bx]) { fclose(fh[c->bx]); fh[c->bx] = NULL; is_dev[c->bx] = 0; fname[c->bx][0] = 0; }
         CF_CLR(c); break;
     case 0x3F: {
         uint16_t h = c->bx, n = c->cx;
@@ -505,6 +584,7 @@ void dos_int21(CPU *c)
 #endif
         int h = f ? new_handle(f) : -1;
         if (h < 0) { fail(c, 4); break; }
+        memcpy(fname[h], fname[c->bx], sizeof fname[h]); fmode[h] = 2; is_dev[h] = is_dev[c->bx];
         c->ax = (uint16_t)h; CF_CLR(c); break;
     }
     case 0x47: g_cpu.mem[seg_off(c->ds, c->si)] = 0; CF_CLR(c); break;
@@ -525,9 +605,13 @@ void dos_int21(CPU *c)
         if (i < 0) { fail(c, 9); break; }
         unsigned max = room_after(i);
         trace("[dos] resize %04X to %04X (max %04X)\n", c->es, c->bx, max);
-        if (c->bx > max) { arena[i].paras = (uint16_t)max; c->bx = (uint16_t)max; fail(c, 8); break; }
-        arena[i].paras = c->bx; CF_CLR(c); break;
+        if (c->bx > max) { arena[i].paras = (uint16_t)max; arena_mcbs(); c->bx = (uint16_t)max; fail(c, 8); break; }
+        arena[i].paras = c->bx; arena_mcbs(); CF_CLR(c); break;
     }
+    case 0x4B:
+        read_asciiz(c->ds, c->dx, name, sizeof name);
+        if (c->al != 0 || !exec_game(c, name)) { trace("[dos] exec %s: not supported\n", name); fail(c, 2); }
+        break;
     case 0x4C: dos_exit(c->al); break;
     case 0x4E: {
         read_asciiz(c->ds, c->dx, name, sizeof name);
@@ -539,7 +623,8 @@ void dos_int21(CPU *c)
         CF_CLR(c); break;
     }
     case 0x4F: if (!find_fill()) { fail(c, 18); break; } CF_CLR(c); break;
-    case 0x51: case 0x62: c->bx = g_psp_seg; break;
+    case 0x51: case 0x62: c->bx = cur_psp; break;
+    case 0x29: c->al = 0; break;                     /* parse a name into an FCB: nobody uses the FCB */
     case 0x56: {
         char to[260], a[512], b[512];
         read_asciiz(c->ds, c->dx, name, sizeof name);
@@ -661,6 +746,8 @@ static const uint8_t scan_ascii[0x3A] = {
 /* The handlers behind vectors nobody hooked. Returns 0 if there is none. */
 int bios_builtin(CPU *c, unsigned n)
 {
+    state_point();
+
     switch (n) {
     case 0x08: {                                    /* timer: BDA tick, then INT 1Ch */
         uint32_t t = (uint32_t)(g_cpu.mem[0x46C] | g_cpu.mem[0x46D] << 8 | g_cpu.mem[0x46E] << 16 | (uint32_t)g_cpu.mem[0x46F] << 24) + 1;
@@ -698,4 +785,32 @@ int bios_builtin(CPU *c, unsigned n)
     }
     if (n < 8 || (n >= 0x70 && n < 0x78) || (n >= 0x0A && n < 0x10)) return 1;   /* spurious IRQs */
     return 0;
+}
+
+/* Save states (state.c): the memory blocks, the DTA and find state, the
+ * mouse, and the open files -- by name and position, reopened on a load. */
+void dos_state(void)
+{
+    STATE(arena); STATE(narena); STATE(find_names); STATE(find_n); STATE(find_i);
+    STATE(dta_seg); STATE(dta_off); STATE(mx); STATE(my); STATE(mouse_on);
+    long pos[MAXH];
+    char names[MAXH][80];
+    uint8_t modes[MAXH], devs[MAXH];
+    for (int i = 0; i < MAXH; i++) pos[i] = fh[i] && !is_dev[i] ? ftell(fh[i]) : -1;
+    memcpy(names, fname, sizeof names); memcpy(modes, fmode, sizeof modes); memcpy(devs, is_dev, sizeof devs);
+    STATE(pos); STATE(names); STATE(modes); STATE(devs);
+    kb_head = kb_tail = 0; mick_x = mick_y = 0;
+    for (int i = 5; i < MAXH; i++) {
+        if (!memcmp(names[i], fname[i], sizeof names[i]) && modes[i] == fmode[i] && devs[i] == is_dev[i]
+            && (fh[i] != NULL) == (names[i][0] != 0)) {
+            if (fh[i] && pos[i] >= 0) fseek(fh[i], pos[i], SEEK_SET);
+            continue;
+        }
+        if (fh[i]) { fclose(fh[i]); fh[i] = NULL; }
+        memcpy(fname[i], names[i], sizeof fname[i]); fmode[i] = modes[i]; is_dev[i] = devs[i];
+        if (!names[i][0]) continue;
+        fh[i] = devs[i] ? fopen("NUL", "rb") : open_game(names[i], modes[i], 0);
+        if (!fh[i]) fprintf(stderr, "[state] cannot reopen %s\n", names[i]);
+        else if (pos[i] >= 0) fseek(fh[i], pos[i], SEEK_SET);
+    }
 }

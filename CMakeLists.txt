@@ -42,10 +42,10 @@ target_include_directories(ymfm PUBLIC third_party/ymfm)
 
 # The DOS machine, built once and linked into the game and each install tool.
 add_library(dosmachine STATIC src/main.c src/machine.c src/dos.c src/ems.c src/drv.c src/vga.c
-            src/audio.c src/x87.c src/host.c src/opl.cpp)
+            src/audio.c src/x87.c src/host.c src/present_d3d.c src/state.c src/nocompanion.c src/opl.cpp)
 target_include_directories(dosmachine PUBLIC src "${PCRECOMP_HOME}/runtime")
 target_compile_definitions(dosmachine PRIVATE SPACESIM_RUNTIME)
-target_link_libraries(dosmachine PUBLIC ymfm user32 gdi32 winmm)
+target_link_libraries(dosmachine PUBLIC ymfm user32 gdi32 winmm d3d11 dxguid)
 if(SPACESIM_TRACE)
     target_compile_definitions(dosmachine PUBLIC RECOMP_TRACE SPACESIM_DEBUG)
     target_compile_options(dosmachine PUBLIC /Zi /Oy-)
@@ -74,6 +74,18 @@ foreach(prog ${PROGRAMS})
         message(STATUS "${prog}: no lifted code in work/${prog}/gen -- run tools/lift.py ${prog}")
     endif()
 endforeach()
+
+# SS1.EXE, lifted as spacesim's companion (tools/lift.py COMPANIONS): its own
+# library, so its recomp_all.h is the one its files see.
+set(ss1gen "${CMAKE_SOURCE_DIR}/work/ss1/gen")
+if(TARGET spacesim AND EXISTS "${ss1gen}/recomp_dispatch.c")
+    file(GLOB ss1lifted CONFIGURE_DEPENDS "${ss1gen}/*.c")
+    add_library(ss1 STATIC ${ss1lifted})
+    target_include_directories(ss1 PRIVATE "${ss1gen}")
+    target_link_libraries(ss1 PRIVATE dosmachine)
+    target_sources(spacesim PRIVATE src/companion_ss1.c)
+    target_link_libraries(spacesim PRIVATE ss1)
+endif()
 
 # The hardware models on their own, no game data needed: what CI runs.
 add_executable(selftest tests/selftest.c src/vga.c src/x87.c src/audio.c src/opl.cpp)

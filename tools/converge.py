@@ -24,14 +24,13 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MISSES = os.path.join(ROOT, 'work', 'spacesim', 'misses.txt')
+# The game's list and SS1.EXE's (the launcher it runs under; tools/lift.py COMPANIONS)
+MISSES = [os.path.join(ROOT, 'work', p, 'misses.txt') for p in ('spacesim', 'ss1')]
 EXE = os.path.join(ROOT, 'build', 'Release', 'spacesim.exe' if os.name == 'nt' else 'spacesim')
 
 
 def misses():
-    if not os.path.exists(MISSES):
-        return set()
-    return {l.strip() for l in open(MISSES) if ':' in l}
+    return {(m, l.strip()) for m in MISSES if os.path.exists(m) for l in open(m) if ':' in l}
 
 
 def script(path):
@@ -79,8 +78,8 @@ def main():
         print(f'pass {n}: {len(new)} new routine(s) reached at run time')
         if not new:
             return 0
-        subprocess.run([py, os.path.join(ROOT, 'tools', 'lift.py')], cwd=ROOT, check=True,
-                       capture_output=True)
+        subprocess.run([py, os.path.join(ROOT, 'tools', 'lift.py'), 'spacesim', 'ss1'], cwd=ROOT,
+                       check=True, capture_output=True)
         subprocess.run(['cmake', '-B', 'build'], cwd=ROOT, check=True, capture_output=True)
         r = subprocess.run(['cmake', '--build', 'build', '--config', 'Release', '--target', 'spacesim'],
                            cwd=ROOT, capture_output=True, text=True)

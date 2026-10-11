@@ -29,6 +29,7 @@ static int mapped[PHYS] = { -1, -1, -1, -1 };   /* store page in each physical p
 static unsigned h_base[HANDLES], h_pages[HANDLES];
 static uint8_t h_used[HANDLES];
 static unsigned maps;
+static int saved_map[HANDLES][PHYS];      /* 47h/48h, per handle */
 
 uint16_t ems_frame(void) { return frame_seg; }
 
@@ -98,6 +99,22 @@ void ems_int67(CPU *c)
         c->ah = 0;
         break;
     case 0x46: c->al = 0x40; c->ah = 0; break;                     /* version 4.0 */
+    case 0x47:                                                      /* save the page map */
+        if (!ok_h) { c->ah = 0x83; break; }
+        memcpy(saved_map[h], mapped, sizeof mapped);
+        c->ah = 0;
+        break;
+    case 0x48:                                                      /* restore it */
+        if (!ok_h) { c->ah = 0x83; break; }
+        for (int p = 0; p < PHYS; p++) {
+            int s = saved_map[h][p];
+            if (mapped[p] == s) continue;
+            for (int q = 0; q < PHYS; q++) if (q != p && mapped[q] == s && s >= 0) unmap(q);
+            unmap(p);
+            if (s >= 0) { memcpy(phys_at(p), store + (size_t)s * PAGE, PAGE); mapped[p] = s; maps++; }
+        }
+        c->ah = 0;
+        break;
     case 0x4B: {                                                    /* handles in use */
         int n = 0;
         for (int i = 1; i < HANDLES; i++) n += h_used[i];
@@ -127,4 +144,10 @@ void ems_snap(FILE *f)
     fwrite(m, 4, PHYS, f);
     uint32_t hb[HANDLES], hp[HANDLES]; for (int h = 0; h < HANDLES; h++) { hb[h] = h_base[h]; hp[h] = h_pages[h]; }
     fwrite(hb, 4, HANDLES, f); fwrite(hp, 4, HANDLES, f); fwrite(h_used, 1, HANDLES, f);
+}
+
+void ems_state(void)
+{
+    state_io(store, TOTAL_KB * 1024u);
+    STATE(used); STATE(mapped); STATE(saved_map); STATE(h_base); STATE(h_pages); STATE(h_used); STATE(maps);
 }
