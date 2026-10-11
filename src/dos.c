@@ -449,6 +449,7 @@ void dos_int21(CPU *c)
          * earlier version of this did -- overwrote whatever sat at the bottom
          * of the segment, which for Planet Strike's loader was its stack. */
         size_t got = fread(&g_cpu.mem[seg_off(c->ds, c->dx)], 1, n, fh[h]);
+        drv_loaded(seg_off(c->ds, c->dx), (uint32_t)got);   /* a Super VGA driver read over the VGA one */
         c->ax = (uint16_t)got; CF_CLR(c); break;
     }
     case 0x40: {
@@ -559,6 +560,8 @@ void dos_int21(CPU *c)
 
 void bios_int10(CPU *c)
 {
+    void vga_vbe(CPU *c);
+    if (c->ah == 0x4F) { vga_vbe(c); return; }
     switch (c->ah) {
     case 0x00: vga_set_mode(c->al); g_cpu.mem[0x450] = g_cpu.mem[0x451] = 0; break;
     case 0x01: break;

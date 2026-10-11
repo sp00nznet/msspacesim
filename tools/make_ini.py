@@ -2,8 +2,8 @@
 """
 make_ini.py - write SPACESIM.INI the way the game itself would.
 
-    py -3 tools/make_ini.py                         # 320x400 VGA, the defaults
-    py -3 tools/make_ini.py --driver svga8.drv --chipset 1   # 800x600, VESA
+    py -3 tools/make_ini.py                         # 800x600 Super VGA (VESA)
+    py -3 tools/make_ini.py --driver vga.drv        # the original 320x400 VGA
 
 The 1994 SETUP program wrote this file after asking for the video mode, the
 Super VGA chipset, the joystick and the sound. Without it the game stops with
@@ -75,8 +75,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('--exe', default=os.path.join(ROOT, 'game', 'SPACESIM.EXE'))
     ap.add_argument('--out', default=os.path.join(ROOT, 'game', 'SPACESIM.INI'))
-    ap.add_argument('--driver', default='vga.drv', choices=('vga.drv', 'svga.drv', 'svga8.drv'))
-    ap.add_argument('--chipset', type=int, default=0)
+    # 800x600 by default: the remaster. The game shipped 320x400 as its default
+    # because most 1994 cards needed a chipset-specific driver for more.
+    ap.add_argument('--driver', default='svga8.drv', choices=('vga.drv', 'svga.drv', 'svga8.drv'))
+    ap.add_argument('--chipset', type=int, default=0, help='0 = VESA 1.2, which src/vga.c answers')
     a = ap.parse_args()
 
     im = lift.Image(a.exe)

@@ -106,6 +106,31 @@ unwound past.
   through normalised far pointers (`21C6:0001` is `1B87:52F1`): a miss is
   mapped to the code segment that holds it, not taken as a new one.
 
+## 9. Super VGA
+
+The 640x400 and 800x600 modes are separate driver files, `SVGA.DRV` and
+`SVGA8.DRV`. When `SPACESIM.INI` names one, the game reads its first 1700h
+bytes over the built-in driver's header at DS:DE74 and the next 2D00h over the
+built-in driver's code at 293C:D010, then calls D010, which installs the
+driver's entry points into the vector table at DS:BDD0. The same addresses
+hold different code depending on the INI.
+
+`tools/lift.py` lifts each driver as a variant of that region: an image with
+the file's bytes in place, walked from D010 (and from whatever its stores into
+the vector table name), lifted as `fn_X_svga8` and so on, with the built-in
+driver's functions becoming `fn_X_vga`. Every address in the region gets one
+trampoline `fn_X`, which is what the rest of the program calls and what the
+dispatch table holds; `src/drv.c` sends it to the variant whose code is loaded,
+decided after each DOS read that lands in the region by matching the first 32
+bytes of code. A dispatch miss inside the region goes to that variant's own
+list (`misses_svga8.txt`).
+
+With SETUP's chipset "VESA 1.2 Compatible" the drivers use VBE functions 01h,
+02h and 07h and switch banks through the window function's far pointer;
+`src/vga.c` answers them with a 1 MB framebuffer behind a 64 KB window, and
+scans out at the mode's resolution. 800x600 is the default `tools/make_ini.py`
+writes.
+
 ## Debugging kit
 
 | | |

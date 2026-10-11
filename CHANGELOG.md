@@ -26,6 +26,12 @@ versions follow [SemVer](https://semver.org/).
 - `tools/fdiff.py`: runs a lifted function's original bytes under Unicorn
   from a snapshot of a real run and compares memory, registers and VGA planes
   with what the lifted code left.
+- Super VGA: `SVGA.DRV` (640x400) and `SVGA8.DRV` (800x600) lifted as variants
+  of the 2D driver region, switched by which driver the game loads
+  (`src/drv.c`), over a VESA 1.2 model in `src/vga.c` (VBE 00h-07h, banked
+  1 MB framebuffer, the window function). 800x600 is now the default.
+- `tools/converge.py` and `tools/exercise/`: scripted headless play that
+  relifts the code only reached through pointers in data; Setup runs it.
 - Divide faults reach the game's own INT 0 handler with the frame the CPU
   would push (the faulting CS:IP), so it can saturate the quotient and step
   over the instruction as it does on DOS.

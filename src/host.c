@@ -15,7 +15,7 @@
 #include <mmsystem.h>
 #endif
 
-#define FRAME_MAX (800 * 600)                   /* the largest mode the game has: SVGA 800x600 */
+#define FRAME_MAX (1024 * 768)                  /* the largest VESA mode offered (vga.c) */
 static uint32_t frame[FRAME_MAX];
 static uint32_t big[FRAME_MAX];
 static int fw = 320, fh = 200;

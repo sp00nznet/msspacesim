@@ -41,7 +41,7 @@ add_library(ymfm STATIC
 target_include_directories(ymfm PUBLIC third_party/ymfm)
 
 # The DOS machine, built once and linked into the game and each install tool.
-add_library(dosmachine STATIC src/main.c src/machine.c src/dos.c src/ems.c src/vga.c
+add_library(dosmachine STATIC src/main.c src/machine.c src/dos.c src/ems.c src/drv.c src/vga.c
             src/audio.c src/x87.c src/host.c src/opl.cpp)
 target_include_directories(dosmachine PUBLIC src "${PCRECOMP_HOME}/runtime")
 target_compile_definitions(dosmachine PRIVATE SPACESIM_RUNTIME)

@@ -201,6 +201,8 @@ static void miss(const char *how, uint16_t seg, uint16_t off)
     uint32_t key = (uint32_t)seg << 16 | off;
     for (int i = 0; i < nseen; i++) if (seen[i] == key) return;
     if (nseen < 512) seen[nseen++] = key;
+    {   int drv_miss(uint32_t lin);          /* a Super VGA driver's own: drv.c */
+        if (drv_miss((uint32_t)(((int32_t)seg - g_load_seg) * 16 + off))) return; }
     fprintf(stderr, "[miss] %s %04X:%04X (image %05X)\n", how, seg, off,
             (unsigned)(((int32_t)seg - g_load_seg) * 16 + off));
     { void host_backtrace(void); host_backtrace(); }
@@ -238,6 +240,12 @@ void dispatch_near(CPU *cpu, uint16_t cs, uint16_t off)
 
 void dispatch_far(CPU *cpu, uint16_t seg, uint16_t off)
 {
+    if (seg == bios_stub_seg() && off == 0x4F05) {       /* VESA window function: a far call */
+        void vga_vbe_window(CPU *c);
+        vga_vbe_window(cpu);
+        cpu->sp += 4;
+        return;
+    }
     if (seg == bios_stub_seg()) { stub_iret(cpu, off); return; }
     void (*fn)(CPU *) = lookup(seg, off);
     if (fn) fn(cpu); else { miss("call far", seg, off); cpu->sp += 4; }

@@ -363,7 +363,12 @@ def code_pointers(im, entries, bodies, codesegs, tables=False):
                 and repr(nx.op2) == repr(ins.op1)):
             return False
         t = cs * 16 + v
-        return t < seg_end(cs) and t >= cs * 16 + 3 and after_exit(t) and im.decode(cs, v) is not None
+        # Into the driver vector table (DS:BDD0-BDFF) the store itself says it
+        # is a routine; elsewhere, the routine must start after a ret or jmp.
+        vec = nx.op1.type in (OpType.MEM, OpType.MOFFS) and not nx.op1.base and not nx.op1.index \
+            and 0xBDD0 <= (nx.op1.disp & 0xFFFF) < 0xBE00
+        return (t < seg_end(cs) and t >= cs * 16 + 3 and (vec or after_exit(t))
+                and im.decode(cs, v) is not None)
 
     # bytes the walk decoded as instructions: a relocation there is an
     # immediate, handled below; anywhere else it is data
@@ -405,6 +410,30 @@ def code_pointers(im, entries, bodies, codesegs, tables=False):
                 out.add((cs, v))
             elif stored_handler(seq, i, cs, v):
                 out.add((cs, v))
+
+    # Far pointers to its own code, built from CS: `mov dx, cs` beside
+    # `mov ax, offset` (then written into the vector table) or `lea dx, [offset]`
+    # (then INT 21h AH=25h). That is how the timer (INT 8) and divide (INT 0)
+    # handlers are installed, and nothing else ever names them.
+    for lin, body in bodies.items():
+        cs = entries[lin]
+        seq = [body[a] for a in sorted(body)]
+        for i, ins in enumerate(seq):
+            if not (ins.mnemonic in ('mov', 'push') and ins.op2 is not None and repr(ins.op2) == 'cs'
+                    or ins.mnemonic == 'push' and repr(ins.op1) == 'cs'):
+                continue
+            for j in seq[max(0, i - 6):i + 7]:
+                o = j.op2
+                if j.mnemonic == 'mov' and o is not None and o.type == OpType.IMM16:
+                    v = o.disp & 0xFFFF
+                elif (j.mnemonic == 'lea' and o is not None and o.type == OpType.MEM
+                      and not o.base and not o.index):
+                    v = o.disp & 0xFFFF
+                else:
+                    continue
+                t = cs * 16 + v
+                if cs * 16 + 3 <= t < seg_end(cs) and after_exit(t) and im.decode(cs, v) is not None:
+                    out.add((cs, v))
 
     # Indexed handler tables in the data segment: `call word ds:[eax*2+802Eh]`
     # is the SMDL model interpreter's opcode dispatch (85 handlers), and there
@@ -539,6 +568,61 @@ def main():
         lift_one(game)
 
 
+# The 2D driver region. The game's built-in VGA driver sits at 293C:D010; a
+# Super VGA driver file (SVGA.DRV 640x400, SVGA8.DRV 800x600) is read over it at
+# run time -- its first 1700h bytes to the driver header at DS:DE74, the next
+# 2D00h to 293C:D010 -- and its entry point installs the routines the game
+# calls through DS:BDD0. So the same addresses hold different code depending on
+# SPACESIM.INI. Each driver is lifted as a variant of that region (fn_X_vga,
+# fn_X_svga, fn_X_svga8); every address in it gets one trampoline fn_X that the
+# rest of the program calls, and src/drv.c sends it to the variant whose bytes
+# are loaded. See docs/lifting.md, "Super VGA".
+DRV_SEG, DRV_IP, DRV_LEN, DRV_HDR, DRV_HDR_LEN = 0x293C, 0xD010, 0x2D00, 0xDE74, 0x1700
+DRV_FILES = ('SVGA.DRV', 'SVGA8.DRV')
+
+
+def in_drv(lin):
+    return DRV_SEG * 16 + DRV_IP <= lin < DRV_SEG * 16 + DRV_IP + DRV_LEN
+
+
+def walk(im, extra):
+    """discover + code_pointers to a fixed point: (entries, bodies, tables,
+    codesegs, bad, pcalls, fps)."""
+    fps = set()
+    for final in (False, True):
+        while True:
+            entries, bodies, tables, codesegs, bad, pcalls = discover(im, extra | fps)
+            more = code_pointers(im, entries, bodies, codesegs, tables=final) - fps
+            if not more:
+                break
+            fps |= more
+    return entries, bodies, tables, codesegs, bad, pcalls, fps
+
+
+def driver_variants(src, im, codesegs0, work):
+    """[(name, Image, walk result)] for each driver file beside the game."""
+    out = []
+    for fname in DRV_FILES:
+        path = os.path.join(os.path.dirname(src), fname)
+        if not os.path.exists(path):
+            continue
+        drv = open(path, 'rb').read()
+        if len(drv) < DRV_HDR_LEN + DRV_LEN:
+            continue
+        vim = Image(src)
+        img = bytearray(vim.img)
+        img[DRV_SEG * 16 + DRV_IP:DRV_SEG * 16 + DRV_IP + DRV_LEN] = drv[DRV_HDR_LEN:DRV_HDR_LEN + DRV_LEN]
+        img[DRV_HDR:DRV_HDR + DRV_HDR_LEN] = drv[:DRV_HDR_LEN]
+        vim.img = bytes(img)
+        vim._dec = {}
+        name = fname.lower().split('.')[0]
+        extra = {(DRV_SEG, DRV_IP)}
+        extra |= {e for e in load_misses(os.path.join(work, f'misses_{name}.txt'), codesegs0, len(img))
+                  if in_drv(e[0] * 16 + e[1])}
+        out.append((name, vim, walk(vim, extra)))
+    return out
+
+
 def lift_one(game):
     sub, exe = GAMES[game]
     src = os.path.join(ROOT, 'game', exe)
@@ -558,14 +642,13 @@ def lift_one(game):
 
     # Walk from the entry point, then add the stored code pointers the walk
     # makes visible and walk again until nothing new turns up.
-    fps = set()
-    for final in (False, True):
-        while True:
-            entries, bodies, tables, codesegs, bad, pcalls = discover(im, extra | fps)
-            more = code_pointers(im, entries, bodies, codesegs, tables=final) - fps
-            if not more:
-                break
-            fps |= more
+    entries, bodies, tables, codesegs, bad, pcalls, fps = walk(im, extra)
+    variants = driver_variants(src, im, codesegs0, work) if game == 'spacesim' else []
+    # A driver may call game code nothing else reaches: make it an entry here.
+    outside = {(cs, lin - cs * 16) for _n, _i, w in variants for lin, cs in w[0].items()
+               if not in_drv(lin) and lin not in entries}
+    if outside:
+        entries, bodies, tables, codesegs, bad, pcalls, fps = walk(im, extra | outside)
 
     print(f'{exe}: DGROUP {im.dgroup:04X}, {len(codesegs)} code segments, '
           f'{len(entries)} functions, {sum(len(b) for b in bodies.values())} '
@@ -576,7 +659,12 @@ def lift_one(game):
         print(f'  {len(bad)} undecodable targets, first: '
               + ', '.join(f'{c:04X}:{i:04X} (in fn_{l:05X})' for c, i, l in bad[:5]))
 
-    names = {lin: f'fn_{lin:05X}' for lin in entries}
+    names = {lin: f'fn_{lin:05X}' for lin in entries}         # what callers call
+    drv_lins = sorted({lin for lin in entries if game == 'spacesim' and in_drv(lin)} |
+                      {lin for v in variants for lin in v[2][0] if in_drv(lin)})
+    for lin in drv_lins:
+        names[lin] = f'fn_{lin:05X}'                             # the trampoline
+    defname = {lin: names[lin] + ('_vga' if lin in drv_lins else '') for lin in entries}
     lifter = Lifter(known_funcs=names, reloc_words=im.reloc_at, load_seg=LOAD_SEG)
     lifter.far_base = 0
     lifter.dispatch = True
@@ -613,7 +701,7 @@ def lift_one(game):
                                       for ip, arms in tables[lin].items()}
                 lifter.push_calls = pcalls[lin]
                 hooked = names[lin] in EXIT_HOOKS
-                body = lifter.lift_function(names[lin] + ('_body' if hooked else ''), insts,
+                body = lifter.lift_function(defname[lin] + ('_body' if hooked else ''), insts,
                                             cs * 16, entry_addr=lin - cs * 16)
                 for line in body.split('\n'):
                     if 'UNHANDLED' in line or 'needs dispatch' in line:
@@ -623,6 +711,33 @@ def lift_one(game):
                 if hooked:                                # tools/fdiff.py: a snapshot as it returns
                     f.write(f'void {names[lin]}(CPU *cpu) {{ {names[lin]}_body(cpu); '
                             f'recomp_exit_hook("{names[lin]}_body"); }}\n\n')
+
+    # The driver variants, each with its own self-modified bytes.
+    for vname, vim, (ventries, vbodies, vtables, _vc, _vb, vpcalls, _vf) in variants:
+        path = os.path.join(out, f'recomp_drv_{vname}.c')
+        files.append(path)
+        vl = Lifter(known_funcs=names, reloc_words=vim.reloc_at, load_seg=LOAD_SEG)
+        vl.far_base, vl.dispatch, vl.iret_frame, vl.x87 = 0, True, True, True
+        vl.unwind_sp = lifter.unwind_sp
+        vl.smc_imm = smc_targets(ventries, vbodies)
+        with open(path, 'w') as f:
+            f.write(f'/* generated by tools/lift.py: the {vname.upper()}.DRV variant of the 2D driver -- do not commit */\n')
+            f.write('#include "lifted.h"\n\n')
+            for lin in sorted(l for l in ventries if in_drv(l)):
+                cs = ventries[lin]
+                insts = _seal_fallthrough([vbodies[lin][a] for a in sorted(vbodies[lin])])
+                lift16._CODE_SEG = f'{cs:04X}'
+                vl.jump_tables = {ip: [cs * 16 + a for a in arms] for ip, arms in vtables[lin].items()}
+                vl.push_calls = vpcalls[lin]
+                f.write(vl.lift_function(f'{names[lin]}_{vname}', insts, cs * 16, entry_addr=lin - cs * 16) + '\n\n')
+        print(f'  {vname.upper()}.DRV: {sum(1 for l in ventries if in_drv(l))} functions in the driver region')
+    if drv_lins:
+        with open(os.path.join(out, 'recomp_drv.c'), 'w') as f:
+            f.write('/* generated by tools/lift.py -- do not commit */\n#include "lifted.h"\n')
+            f.write('void drv_call(CPU *cpu, uint32_t lin);\n')
+            for lin in drv_lins:
+                f.write(f'void {names[lin]}(CPU *cpu) {{ drv_call(cpu, 0x{lin:05X}); }}\n')
+        files.append(os.path.join(out, 'recomp_drv.c'))
 
     # A far call lift16 could not resolve names a function that does not
     # exist (in practice: bytes decoded past a call that never returns).
@@ -642,8 +757,11 @@ def lift_one(game):
         f.write('/* generated by tools/lift.py -- do not commit */\n#pragma once\n')
         for cs in sorted(codesegs):
             f.write(f'#define SEG_{cs:04X} 0x{(cs + LOAD_SEG) & 0xFFFF:04X}\n')
-        for lin in order:
+        for lin in sorted(set(order) | set(drv_lins)):
             f.write(f'void {names[lin]}(CPU *cpu);\n')
+            if lin in drv_lins:
+                for vn in ['vga'] + [v[0] for v in variants]:
+                    f.write(f'void {names[lin]}_{vn}(CPU *cpu);\n')
         for n in sorted(strays):
             f.write(f'void {n}(CPU *cpu);\n')
     with open(os.path.join(out, 'recomp_dispatch.c'), 'w') as f:
@@ -653,11 +771,31 @@ def lift_one(game):
         f.write(f'const uint16_t g_entry_cs = 0x{im.cs:04X}, g_entry_ip = 0x{im.ip:04X};\n')
         f.write(f'const uint16_t g_entry_ss = 0x{im.ss:04X}, g_entry_sp = 0x{im.sp:04X};\n')
         f.write(f'const char g_game_id[] = "{game}";\n')
-        f.write(f'const unsigned g_func_count = {len(order)};\n')
+        table = sorted(set(order) | set(drv_lins))
+        f.write(f'const unsigned g_func_count = {len(table)};\n')
         f.write('const RecompFunc g_funcs[] = {\n')
-        for lin in order:
+        for lin in table:
             f.write(f'  {{0x{lin:05X}, {names[lin]}}},\n')
         f.write('};\n')
+        # The driver variants: which functions each has, and the first 32 bytes
+        # of its code, which src/drv.c matches against what the game loaded.
+        vlist = [('vga', im, set(l for l in entries if l in drv_lins))] + \
+                [(v[0], v[1], set(l for l in v[2][0] if in_drv(l))) for v in variants]
+        if drv_lins:
+            for vn, vim, vset in vlist:
+                f.write(f'static const RecompFunc drv_{vn}[] = {{\n')
+                for lin in sorted(vset):
+                    f.write(f'  {{0x{lin:05X}, {names[lin]}_{vn}}},\n')
+                f.write('  {0, 0}\n};\n')
+        lo = DRV_SEG * 16 + DRV_IP
+        f.write('const DrvVariant g_drv_variants[] = {\n')
+        for vn, vim, vset in (vlist if drv_lins else []):
+            sig = ','.join(str(b) for b in vim.img[lo:lo + 32])
+            f.write(f'  {{"{vn}", {{{sig}}}, drv_{vn}, {len(vset)}}},\n')
+        f.write('  {0}\n};\n')
+        f.write(f'const unsigned g_drv_count = {len(vlist) if drv_lins else 0};\n')
+        f.write(f'const uint32_t g_drv_lo = 0x{lo:05X}, g_drv_len = 0x{DRV_LEN:X};\n')
+        f.write(f'const uint16_t g_drv_seg = 0x{DRV_SEG:04X};\n')
     # The load module itself, so the built exe needs only the data files: the
     # code is lifted, but the image's data -- DGROUP, the far tables -- is
     # loaded and relocated at boot exactly as DOS would.

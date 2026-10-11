@@ -50,6 +50,13 @@ int  cpu_lsl(CPU *cpu, uint16_t sel, uint16_t *out);
 
 typedef struct { uint32_t addr; void (*fn)(CPU *); } RecompFunc;
 
+/* the 2D driver variants (tools/lift.py, src/drv.c); none for the install tools */
+typedef struct { const char *name; uint8_t sig[32]; const RecompFunc *funcs; unsigned n; } DrvVariant;
+extern const DrvVariant g_drv_variants[];
+extern const unsigned g_drv_count;
+extern const uint32_t g_drv_lo, g_drv_len;
+extern const uint16_t g_drv_seg;       /* its code segment, image-relative */
+
 /* emitted by tools/lift.py into recomp_dispatch.c */
 extern const uint16_t g_load_seg, g_psp_seg;
 extern const uint16_t g_entry_cs, g_entry_ip, g_entry_ss, g_entry_sp;

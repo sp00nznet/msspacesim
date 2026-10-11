@@ -11,7 +11,8 @@
     6. build                                     (cmake)
     7. generate the star systems                 (tools\generate.py)
     8. write SPACESIM.INI and SETUP.INI          (tools\make_ini.py)
-    9. put "Microsoft Space Simulator.lnk" in this folder
+    9. play scripted input headless, relifting what it reaches (tools\converge.py)
+   10. put "Microsoft Space Simulator.lnk" in this folder
 
   Every step is skipped when its result is already there, so running it again
   after a failure carries on. Details go to setup.log. It runs exactly the
@@ -141,6 +142,7 @@ if (-not (Test-Path (Join-Path $game "SETUP.INI"))) {
     # the registered name and product ID the installer stored; shown in About
     "$env:USERNAME`r`n00000-000-0000000`r`n" | Out-File (Join-Path $game "SETUP.INI") -Encoding ascii -NoNewline
 }
+Run "playing the game headless to find the code only reached at run time (several minutes)" { & $py tools\converge.py }
 
 # ---- 5. shortcut --------------------------------------------------------------------
 $exe = Join-Path $Root "build\Release\spacesim.exe"

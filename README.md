@@ -25,7 +25,7 @@ harness as the other recomp repos).
 | 3D models | ✅ flat-shaded (an asteroid in the Alpha Centauri system, seen headless) |
 | Mouse / joystick in play | not yet verified |
 | Sound and music | not yet (the AdLib player is a separate TSR, `SS1.EXE`) |
-| Super VGA 640×400 and 800×600 | not yet (the drivers are separate binaries loaded at run time) |
+| Super VGA 640×400 and 800×600 | ✅ 800×600 by default: the driver files are lifted as variants of the driver region, over a VESA 1.2 model |
 | Lift | 1,157 functions, 58,299 instructions, 3 code segments |
 
 Nobody has played it with hands on a keyboard yet. Treat it as pre-alpha.
@@ -95,7 +95,15 @@ anything, so PATH is current.
    py -3 tools\make_ini.py
    ```
    and a two-line `game\SETUP.INI` (your name, then a product ID).
-7. Run `build\Release\spacesim.exe`.
+7. Play the scripted inputs in `tools\exercise\` headless, lifting and
+   rebuilding until no new code turns up:
+   ```
+   py -3 tools\converge.py
+   ```
+   Some user-interface code is only named by pointers in data, so the lifter
+   finds it when a run reaches it (`work\spacesim\misses.txt`, never
+   committed). Each pass prints how many new routines it found; it stops at 0.
+8. Run `build\Release\spacesim.exe`.
 
 ## Usage
 

@@ -15,9 +15,6 @@
 What the sibling projects added on top (Gunman, SimCity 2000, Theme Park),
 brought here:
 
-- **Super VGA**: lift `SVGA.DRV` and `SVGA8.DRV` (they load at 293C:D010,
-  over the built-in VGA driver) so 640x400 and 800x600 work, and default to
-  the highest.
 - **A modern presenter**: Direct3D 11, resizable window, borderless
   fullscreen, integer / sharp-bilinear / CRT scaling.
 - **Settings menu (F10)**, save states, speed control (the sim already has a

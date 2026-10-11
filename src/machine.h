@@ -40,6 +40,9 @@ uint16_t bios_stub_seg(void);
 int  bios_builtin(CPU *cpu, unsigned num);   /* the BIOS/DOS behind an unhooked vector */
 void bios_key_push(uint8_t scan, uint8_t ascii);
 
+/* drv.c: the 2D driver variants */
+void drv_loaded(uint32_t linear, uint32_t n);
+
 /* ems.c: expanded memory behind INT 67h */
 void ems_int67(CPU *cpu);
 void ems_report(void);

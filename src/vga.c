@@ -28,6 +28,19 @@ static uint8_t seq[8], gc[16], crtc[32], attr[32];
 static uint8_t seq_i, gc_i, crtc_i, attr_i, attr_flip;
 static uint8_t dac[256][3], dac_wi, dac_ri, dac_wc, dac_rc, dac_mask = 0xFF;
 static int mode = 3;                 /* BIOS mode: 3 text, 0x13 graphics */
+
+/* Super VGA, through the VESA BIOS Extensions 1.2: one linear megabyte seen
+ * through a 64 KB window at A000 whose position the driver sets (function
+ * 05h, or the window function's far pointer), and a display start it moves to
+ * flip pages (07h). SVGA.DRV (640x400) and SVGA8.DRV (800x600) take this path
+ * when SETUP's chipset is "VESA 1.2 Compatible". */
+static uint8_t svga[1 << 20];
+static int svga_mode;                /* 0, or the VESA mode set */
+static int svga_w, svga_h;
+static unsigned svga_bank;           /* window position, in 64 KB units */
+static unsigned svga_start;          /* display start, in bytes */
+static const struct { uint16_t mode, w, h; } vbe_modes[] = {
+    { 0x100, 640, 400 }, { 0x101, 640, 480 }, { 0x103, 800, 600 }, { 0x105, 1024, 768 } };
 static int chain4 = 0;
 static uint8_t misc_out = 0x63;
 
@@ -37,6 +50,7 @@ static inline int chained(void) { return (seq[4] & 8) != 0; }
 
 void vga_set_mode(int m)
 {
+    svga_mode = 0;
     mode = m & 0x7F;
     memset(seq, 0, sizeof seq); memset(gc, 0, sizeof gc); memset(crtc, 0, sizeof crtc);
     seq[2] = 0x0F;
@@ -92,6 +106,7 @@ int recomp_mem_write8(CPU *cpu, uint32_t a, uint8_t v)
 #endif
     (void)cpu;
     uint32_t off = a - 0xA0000u;
+    if (svga_mode) { svga[((svga_bank << 16) + off) & 0xFFFFF] = v; return 1; }
     if (chain4) { vram[off] = v; return 1; }
     uint8_t mask = seq[2] & 0x0F;
     uint8_t *p = &vram[off * 4];
@@ -131,6 +146,7 @@ int recomp_mem_read8(CPU *cpu, uint32_t a, uint8_t *out)
     if (a - 0xA0000u >= 0x10000u) return 0;
     (void)cpu;
     uint32_t off = a - 0xA0000u;
+    if (svga_mode) { *out = svga[((svga_bank << 16) + off) & 0xFFFFF]; return 1; }
     if (chain4) { *out = vram[off]; return 1; }
     uint8_t *p = &vram[off * 4];
     latch[0] = p[0]; latch[1] = p[1]; latch[2] = p[2]; latch[3] = p[3];
@@ -224,6 +240,14 @@ static inline uint32_t rgb(int i)
  * from the CRTC: 200, or 400 with double scan off. Text: 640x400. */
 void vga_compose(uint32_t *out, int *w, int *h)
 {
+    if (svga_mode) {
+        *w = svga_w; *h = svga_h;
+        for (int y = 0; y < svga_h; y++) {
+            const uint8_t *row = &svga[(svga_start + (unsigned)y * svga_w) & 0xFFFFF];
+            for (int x = 0; x < svga_w; x++) out[y * svga_w + x] = rgb(row[x]);
+        }
+        return;
+    }
     if (mode != 0x13) {
         static uint32_t blink;
         const uint8_t *t = vga_text_mem();
@@ -267,6 +291,85 @@ void vga_compose(uint32_t *out, int *w, int *h)
 }
 
 void vga_start(void) { t0_us = emu_us(); }
+
+int vga_svga_active(void) { return svga_mode != 0; }
+
+static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+
+/* The window function (ModeInfoBlock.WinFuncPtr): a far call with BH = 0 set
+ * (DX = position) or 1 get, BL = window. machine.c routes F000:4F05 here. */
+void vga_vbe_window(CPU *c)
+{
+    if (c->bh == 0) svga_bank = c->dx & 0x0F;
+    else c->dx = (uint16_t)svga_bank;
+}
+
+/* INT 10h AH=4Fh */
+void vga_vbe(CPU *c)
+{
+    uint8_t *es_di = &g_cpu.mem[(((uint32_t)c->es << 4) + c->di) & 0xFFFFF];
+    switch (c->al) {
+    case 0x00: {                                        /* controller information */
+        memset(es_di, 0, 256);
+        memcpy(es_di, "VESA", 4);
+        put16(es_di + 4, 0x0102);
+        /* the strings and the mode list live in the block's reserved area */
+        memcpy(es_di + 0x100 - 32, "pcrecomp VGA", 13);
+        put16(es_di + 6, (uint16_t)(c->di + 0x100 - 32)); put16(es_di + 8, c->es);
+        uint16_t list = (uint16_t)(c->di + 0x100 - 64);
+        put16(es_di + 14, list); put16(es_di + 16, c->es);
+        for (int i = 0; i < 4; i++) put16(es_di + 0x100 - 64 + 2 * i, vbe_modes[i].mode);
+        put16(es_di + 0x100 - 64 + 8, 0xFFFF);
+        put16(es_di + 18, 16);                          /* 16 x 64 KB = 1 MB */
+        c->ax = 0x004F;
+        return;
+    }
+    case 0x01: {                                        /* mode information */
+        int k = -1;
+        for (int i = 0; i < 4; i++) if (vbe_modes[i].mode == (c->cx & 0x1FF)) k = i;
+        if (k < 0) { c->ax = 0x014F; return; }
+        memset(es_di, 0, 256);
+        put16(es_di + 0, 0x001B);                       /* supported, extended info, colour, graphics */
+        es_di[2] = 0x07; es_di[3] = 0;                  /* window A: exists, readable, writable */
+        put16(es_di + 4, 64); put16(es_di + 6, 64);     /* granularity and size, KB */
+        put16(es_di + 8, 0xA000); put16(es_di + 10, 0);
+        put16(es_di + 12, 0x4F05); put16(es_di + 14, bios_stub_seg());   /* the window function */
+        put16(es_di + 16, vbe_modes[k].w);              /* bytes per scan line */
+        put16(es_di + 18, vbe_modes[k].w); put16(es_di + 20, vbe_modes[k].h);
+        es_di[22] = 8; es_di[23] = 16; es_di[24] = 1; es_di[25] = 8; es_di[26] = 1;
+        es_di[27] = 4;                                  /* packed pixel */
+        es_di[29] = (uint8_t)((1u << 20) / ((unsigned)vbe_modes[k].w * vbe_modes[k].h) - 1);
+        es_di[30] = 1;
+        c->ax = 0x004F;
+        return;
+    }
+    case 0x02: {                                        /* set mode */
+        uint16_t m = c->bx & 0x1FF;
+        if (m < 0x100) { vga_set_mode(m | (c->bx & 0x8000 ? 0x80 : 0)); c->ax = 0x004F; return; }
+        for (int i = 0; i < 4; i++)
+            if (vbe_modes[i].mode == m) {
+                vga_set_mode(0x13 | 0x80);              /* the DAC and sequencer as mode 13h leaves them */
+                svga_mode = m; svga_w = vbe_modes[i].w; svga_h = vbe_modes[i].h;
+                svga_bank = 0; svga_start = 0;
+                if (!(c->bx & 0x8000)) memset(svga, 0, sizeof svga);
+                trace("[vga] VESA mode %03Xh, %dx%d\n", m, svga_w, svga_h);
+                c->ax = 0x004F;
+                return;
+            }
+        c->ax = 0x014F;
+        return;
+    }
+    case 0x03: c->bx = (uint16_t)(svga_mode ? svga_mode : mode); c->ax = 0x004F; return;
+    case 0x05: vga_vbe_window(c); c->ax = 0x004F; return;
+    case 0x07:
+        if ((c->bl & 0x7F) == 0) svga_start = (unsigned)c->dx * (svga_w ? svga_w : 320) + c->cx;
+        else { c->cx = (uint16_t)(svga_w ? svga_start % svga_w : 0); c->dx = (uint16_t)(svga_w ? svga_start / svga_w : 0); }
+        c->ax = 0x004F;
+        return;
+    }
+    trace("[vga] VESA function %02Xh not modelled\n", c->al);
+    c->ax = 0x014F;
+}
 
 /* for SPACESIM_SNAP (machine.c): planes, then seq, gc, latches */
 void vga_snap(FILE *f)
