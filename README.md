@@ -38,47 +38,64 @@ Not committed yet. Every frame so far comes from headless runs
 ## Getting Started
 
 You need your own copy: the three 1.44 MB floppy images (`Microsoft Space
-Simulator 1.IMA` … `3.IMA`).
+Simulator 1.IMA` … `3.IMA`), loose or in the zip they often come in.
 
 ### Quick start
 
-`Setup.cmd` is not written yet; use the steps below.
+1. Download this repository (Code → Download ZIP) and unpack it anywhere.
+2. Put the floppy images (or their zip) in its `original` folder.
+3. Double-click **`Setup.cmd`**.
+
+Setup checks for Python 3, CMake, Git and the Visual Studio 2022 C++ build
+tools and offers to install whatever is missing (it says what, why and how big
+first). It finds the images in `original\`, the repository folder or your
+Downloads, or asks. Then it runs the steps below and leaves
+**`Microsoft Space Simulator.lnk`** in the folder. Building takes a few
+minutes. If anything fails it stops with one sentence saying what to do, and
+the details are in `setup.log`; running it again carries on from there.
 
 ### Step by step
 
-Prerequisites: Windows 10/11, Visual Studio 2022 with C++ (`cmake` on PATH),
-Python 3.10+ with `pip install capstone`, Git, and 7-Zip (to unpack the
-installer archives, until `tools/install.py` replaces it).
+Prerequisites: Windows 10/11; Visual Studio 2022 with "Desktop development
+with C++" (or the Build Tools); CMake 3.20+; Git; Python 3.10+ with
+`pip install capstone`. Use `py -3` -- a bare `python` can be the Microsoft
+Store alias, which only opens the Store. Open a new terminal after installing
+anything, so PATH is current.
 
-1. Get the toolkit next to this folder, on the branch this game needs until
-   its pull requests land:
+1. The toolkit, at the commit this needs (its changes are open pull requests):
    ```
-   git clone https://github.com/sp00nznet/pcrecomp work/pcrecomp
+   git clone https://github.com/sp00nznet/pcrecomp work\pcrecomp
+   git -C work\pcrecomp checkout work/msspacesim-integration
    ```
-2. Put the floppy images in `original/`, then unpack each disk's
-   `DISKn.EXE` (an LHA archive) into `game/` with 7-Zip.
-3. Lift the game and the install tools to C (`work/*/gen`, never committed):
+2. Unpack the floppy images (or their zip) into `game\`:
    ```
-   py -3 tools/lift.py all
+   py -3 tools\unpack_floppies.py original game
    ```
+   `375 files unpacked to game` -- each archive member's CRC is checked.
+3. Lift the game and the 21 install tools to C (`work\*\gen`, never committed):
+   ```
+   py -3 tools\lift.py all
+   ```
+   The first line should read `SPACESIM.EXE: ... 3 code segments, 1157 functions`
+   or close to it.
 4. Build:
    ```
    cmake -B build -G "Visual Studio 17 2022" -A x64
-   cmake --build build --config Release
+   cmake --build build --config Release -- -m
    ```
-5. Generate the star systems, as the installer did (`FINISH.BAT`; S10DATA
-   is skipped exactly as the original batch file's typo skipped it):
+5. Generate the star systems, as the installer did:
    ```
-   for %p in (makedata makehmo s01data s02data s03data s04data s05data s06data s07data s08data s09data s11data s12data s13data s14data s15data s16data s17data s18data s19data) do build\Release\%p.exe --headless --data game
+   py -3 tools\generate.py
    ```
-6. Write the settings file the 1994 SETUP program wrote:
+   It runs the recompiled MAKEDATA, MAKEHMO and S01–S19DATA and ends with
+   `star systems generated`. S10DATA is skipped, exactly as the original
+   `FINISH.BAT`'s typo (`s10ata`) skipped it; `--s10data` adds that system.
+6. Write the settings the 1994 SETUP program wrote:
    ```
-   py -3 tools/make_ini.py
+   py -3 tools\make_ini.py
    ```
-7. Run:
-   ```
-   build\Release\spacesim.exe
-   ```
+   and a two-line `game\SETUP.INI` (your name, then a product ID).
+7. Run `build\Release\spacesim.exe`.
 
 ## Usage
 

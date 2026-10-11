@@ -4,9 +4,6 @@
 
 - **Playable**: verify keyboard, mouse and joystick in the simulator; fly a
   shipped situation; save and load a situation.
-- **Setup.cmd** and **tools/install.py**: unpack the floppy images (FAT12 and
-  the LHA archives) without 7-Zip, run the generators, write the settings,
-  build, and leave a launcher.
 - **Conformance harness**: scripted headless runs (logo, title, simulator,
   a situation load) with frame checks, in CI where the game is present and
   SKIP where it is not.

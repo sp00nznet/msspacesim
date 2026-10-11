@@ -15,6 +15,12 @@ versions follow [SemVer](https://semver.org/).
 - A DOS machine for the game (`src/`), started from the Blake Stone recomp's:
   DOS and BIOS services, PIC/PIT/keyboard, a planar VGA (320x400 unchained),
   and expanded memory (`src/ems.c`, LIM EMS 4.0 behind the EMMXXXX0 device).
+- `tools/unpack_floppies.py`: the floppy images (or their zip) to the installed
+  files in pure Python: FAT12, LHA level-0 `-lh5-` with each member's CRC
+  checked. Byte-identical to 7-Zip's extraction on all 375 files.
+- `tools/generate.py`: the installer's data generators in `FINISH.BAT`'s order
+  (S10DATA skipped as the batch file's typo skipped it; `--s10data` adds it).
+- `Setup.cmd`: the Quick start, from floppy images to a shortcut.
 - `tools/make_ini.py`: writes `SPACESIM.INI` from the game's own writer
   routine and defaults, as the 1994 SETUP program did.
 - `tools/fdiff.py`: runs a lifted function's original bytes under Unicorn

@@ -61,7 +61,8 @@ def _pcrecomp_home():
     """PCRECOMP_HOME, else a sibling checkout -- never one person's drive."""
     env = os.environ.get('PCRECOMP_HOME')
     cands = [env] if env else []
-    cands += [os.path.join(os.path.dirname(ROOT), 'pcrecomp'),
+    cands += [os.path.join(ROOT, 'work', 'pcrecomp'),          # where Setup checks it out
+              os.path.join(os.path.dirname(ROOT), 'pcrecomp'),
               os.path.join(os.path.dirname(ROOT), 'pcrecomp-main')]
     for c in cands:
         if c and os.path.isdir(os.path.join(c, 'tools', 'lift')):
