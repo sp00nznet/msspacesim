@@ -1,0 +1,47 @@
+# --- Never committed (repo rules, section 3) --------------------------------
+# Your own copy of the game. Microsoft Space Simulator is commercial software;
+# nothing from it -- floppy images, the archive they came in, the installed
+# files, the executables -- is ever in this repository.
+original/
+game/
+*.IMA
+*.ima
+*.img
+msspacesim.zip
+*.EXE
+*.exe
+*.DRV
+*.PBL
+*.BIN
+*.R8
+*.VDA
+*.VDI
+*.MDI
+
+# Everything generated from the game binaries: the unpacked images, the lifted
+# C (work/<program>/gen), dispatch-miss lists, snapshots, recordings, frames,
+# and the pcrecomp worktree Setup checks out there.
+work/
+
+# Anything a run writes outside game/.
+saves/
+screenshots/
+
+# --- Build output -------------------------------------------------------------
+build/
+build-*/
+out/
+dist/
+*.obj
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# --- Tooling ------------------------------------------------------------------
+__pycache__/
+*.pyc
+.vs/
+.vscode/
+*.user
+*.log
