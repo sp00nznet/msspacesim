@@ -81,12 +81,12 @@ if ($need.Count) {
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
     $py = if (Have "py") { "py" } else { "python" }
 }
-$pyargs = if ($py -eq "py") { @("-3") } else { @() }
-& $py @pyargs -c "import capstone" 2>$null
+
+& $py -c "import capstone" 2>$null
 if ($LASTEXITCODE -ne 0) {
     Say "Missing: the capstone Python package -- the disassembler under the lifter. Download: about 3 MB."
     if (-not (Ask "Install it now with pip?")) { Fail "Setup needs capstone: $py -m pip install capstone" }
-    Run "installing capstone" { & $py @pyargs -m pip install --quiet capstone }
+    Run "installing capstone" { & $py -m pip install --quiet capstone }
 }
 if (-not (Have "ffmpeg")) { Say "  (ffmpeg not found: everything works except --record. winget install Gyan.FFmpeg adds it.)" }
 
@@ -112,7 +112,7 @@ if (Test-Path (Join-Path $game "SPACESIM.EXE")) {
     if (-not $src) { Fail "No floppy images found. Run Setup again with the folder that holds 'Microsoft Space Simulator 1.IMA' .. '3.IMA'." }
     $zip = @(Get-ChildItem $src -File -Filter *.zip -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'spacesim' })
     $from = if ((-not (Test-Path $src -PathType Leaf)) -and $zip.Count -and -not @(Get-ChildItem $src -Recurse -File | Where-Object { $_.Name -match '[123]\.ima$' }).Count) { $zip[0].FullName } else { $src }
-    Run "unpacking the floppy images from $from" { & $py @pyargs tools\unpack_floppies.py $from game }
+    Run "unpacking the floppy images from $from" { & $py tools\unpack_floppies.py $from game }
 }
 
 # ---- 3. the toolkit -----------------------------------------------------------------
@@ -128,14 +128,14 @@ if ($env:PCRECOMP_HOME -and (Test-Path "$env:PCRECOMP_HOME\tools\lift\lift16.py"
 $env:PCRECOMP_HOME = $pcr
 
 # ---- 4. lift, build, generate, settings -----------------------------------------------
-Run "lifting the game and the install tools to C" { & $py @pyargs tools\lift.py all }
+Run "lifting the game and the install tools to C" { & $py tools\lift.py all }
 Run "configuring the build" { cmake -B build -G "Visual Studio 17 2022" -A x64 "-DPCRECOMP_HOME=$pcr" }
 Run "compiling (a few minutes: the lifted C is large)" { cmake --build build --config Release -- -m }
 $gen = @("tools\generate.py")
 if ($S10Data) { $gen += "--s10data" }
-Run "generating the star systems, as the installer did" { & $py @pyargs @gen }
+Run "generating the star systems, as the installer did" { & $py @gen }
 if (-not (Test-Path (Join-Path $game "SPACESIM.INI"))) {
-    Run "writing SPACESIM.INI (what the 1994 SETUP program wrote)" { & $py @pyargs tools\make_ini.py }
+    Run "writing SPACESIM.INI (what the 1994 SETUP program wrote)" { & $py tools\make_ini.py }
 }
 if (-not (Test-Path (Join-Path $game "SETUP.INI"))) {
     # the registered name and product ID the installer stored; shown in About
