@@ -25,7 +25,7 @@ work/
 
 # Anything a run writes outside game/.
 saves/
-screenshots/
+/screenshots/
 
 # --- Build output -------------------------------------------------------------
 build/
@@ -45,5 +45,5 @@ __pycache__/
 .vscode/
 *.user
 *.log
-states/
-screenshots/
+/states/
+/screenshots/
