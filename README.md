@@ -65,7 +65,7 @@ anything, so PATH is current.
 1. The toolkit, at the commit this needs (its changes are open pull requests):
    ```
    git clone https://github.com/sp00nznet/pcrecomp work\pcrecomp
-   git -C work\pcrecomp checkout work/msspacesim-integration
+   git -C work\pcrecomp checkout 357136a
    ```
 2. Unpack the floppy images (or their zip) into `game\`:
    ```

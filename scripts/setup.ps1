@@ -30,7 +30,7 @@ $Log = Join-Path $Root "setup.log"
 # The toolkit revision this game needs: pcrecomp with the changes listed in
 # CHANGELOG.md. A commit, not a branch: branches move, this build should not.
 $PcrecompUrl = "https://github.com/sp00nznet/pcrecomp.git"
-$PcrecompRef = "work/msspacesim-integration"
+$PcrecompRef = "357136a"   # work/msspacesim-integration: main + #85-#91
 
 function Say($m) { Write-Host $m; $m | Out-File $Log -Append -Encoding utf8 }
 function Fail($m) {
