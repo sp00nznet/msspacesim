@@ -166,7 +166,9 @@ The full list is at the top of [`src/main.c`](src/main.c).
 
 ## Building from source
 
-Steps 3 and 4 above. The lifter and its decisions are described in
+Steps 3 and 4 above, or on a [recomp-netlab](https://github.com/sp00nznet/recomp-netlab)
+farm: `netlab check msspacesim` (recipe `projects/msspacesim.env`) builds with
+clang-cl into `build-farm/` and runs `selftest.exe` on a test VM. The lifter and its decisions are described in
 [docs/lifting.md](docs/lifting.md); the parts and how they fit in
 [docs/architecture.md](docs/architecture.md).
 

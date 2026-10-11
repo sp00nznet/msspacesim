@@ -7,8 +7,6 @@
 - **Conformance harness**: scripted headless runs (logo, title, simulator,
   a situation load) with frame checks, in CI where the game is present and
   SKIP where it is not.
-- **netlab recipe** (`projects/msspacesim.env`) for builds and QA off the
-  workstation.
 
 ## The remaster
 
