@@ -20,6 +20,9 @@ versions follow [SemVer](https://semver.org/).
 - `tools/fdiff.py`: runs a lifted function's original bytes under Unicorn
   from a snapshot of a real run and compares memory, registers and VGA planes
   with what the lifted code left.
+- Divide faults reach the game's own INT 0 handler with the frame the CPU
+  would push (the faulting CS:IP), so it can saturate the quotient and step
+  over the instruction as it does on DOS.
 - Debug builds (`-DSPACESIM_TRACE=ON`): `SPACESIM_SNAP`, `SPACESIM_WATCH`,
   `SPACESIM_CALLS`, a stack-depth guard naming runaway recursions.
 
@@ -30,3 +33,4 @@ versions follow [SemVer](https://semver.org/).
 - lift16: `rcl`/`rcr` on a dword kept the carry in a 32-bit value and lost it.
 - lift16: `bt`-family with a register offset into memory addresses a bit string.
 - lift16: return when a callee has unwound the guest stack past the frame (opt-in).
+- lift16: a divide faults on quotient overflow too, with cs:ip at the divide.

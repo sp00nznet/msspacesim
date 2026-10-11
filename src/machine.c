@@ -348,10 +348,25 @@ void machine_init(void)
     next_t0 = pit_div[0];
 }
 
+/* A divide that faulted (zero divisor or a quotient too big), with cpu->cs:ip
+ * at the divide (pcrecomp lift16 sets them). The game's INT 0 handler reads
+ * the instruction through the return address -- a 66h prefix means 32 bits
+ * -- saturates the quotient, and steps the return address over it; so it gets
+ * the frame the CPU would push. The lifted code then simply carries on after
+ * the divide, which is where the handler's iret would have gone. */
 void recomp_div0(const char *what)
 {
-    fprintf(stderr, "[cpu] divide by zero (%s)\n", what);
-    call_vector(&g_cpu, 0);
+    CPU *c = &g_cpu;
+    uint8_t *v = &c->mem[0];
+    uint16_t off = (uint16_t)(v[0] | v[1] << 8), seg = (uint16_t)(v[2] | v[3] << 8);
+    void (*fn)(CPU *) = seg == bios_stub_seg() ? NULL : lookup(seg, off);
+    if (!fn) { fprintf(stderr, "[cpu] divide fault (%s) at %04X:%04X, no handler\n", what, c->cs, c->ip); return; }
+    trace("[cpu] divide fault (%s) at %04X:%04X\n", what, c->cs, c->ip);
+    push16(c, c->flags);
+    push16(c, c->cs);
+    push16(c, c->ip);
+    c->flags &= ~(FLAG_IF | FLAG_TF);
+    fn(c);
 }
 
 int cpu_lar(CPU *cpu, uint16_t sel, uint16_t *out) { (void)cpu; (void)sel; (void)out; return 0; }

@@ -4,8 +4,6 @@
 
 - **Playable**: verify keyboard, mouse and joystick in the simulator; fly a
   shipped situation; save and load a situation.
-- **Divide faults**: the game installs its own INT 0 handler; a lifted
-  divide overflow should reach it instead of printing a warning.
 - **Setup.cmd** and **tools/install.py**: unpack the floppy images (FAT12 and
   the LHA archives) without 7-Zip, run the generators, write the settings,
   build, and leave a launcher.

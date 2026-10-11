@@ -21,10 +21,12 @@ harness as the other recomp repos).
 | Microsoft Home logo, title screen | ✅ |
 | Simulator: view window, star field, instrument panel, mission clock | ✅ renders and runs (seen headless) |
 | Expanded memory (EMS 4.0) | ✅ the game's 40 pages, bank switching |
-| Keyboard / mouse / joystick in play | not yet verified |
+| Menus, dialogs, keyboard | ✅ menus, the Location dialogs (deep sky, stars, planets, comets, surface), Open Situation, Arrange Windows; scripted keys in headless runs |
+| 3D models | ✅ flat-shaded (an asteroid in the Alpha Centauri system, seen headless) |
+| Mouse / joystick in play | not yet verified |
 | Sound and music | not yet (the AdLib player is a separate TSR, `SS1.EXE`) |
 | Super VGA 640×400 and 800×600 | not yet (the drivers are separate binaries loaded at run time) |
-| Lift | 1,115 functions, 56,337 instructions, 3 code segments |
+| Lift | 1,157 functions, 58,299 instructions, 3 code segments |
 
 Nobody has played it with hands on a keyboard yet. Treat it as pre-alpha.
 
