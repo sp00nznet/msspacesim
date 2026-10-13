@@ -13,6 +13,7 @@ extern CPU g_cpu;
 typedef struct {
     const char *datadir;      /* the game's files (read) */
     const char *savedir;      /* where CONFIG and saved games go (read+write) */
+    const char *moddir;       /* --mod: a folder laid over datadir (read) */
     int headless;             /* no window: render offscreen */
     const char *record;       /* --record out.mp4 */
     double seconds;           /* stop after this long (0 = never) */
@@ -59,6 +60,7 @@ int  machine_port_out(uint16_t port, uint8_t v);
 void call_vector(CPU *cpu, unsigned vec);    /* run whatever is in the IVT, as INT would */
 uint64_t pit_now(void);
 uint64_t emu_us(void);                /* see machine.c: wall clock, or deterministic */
+void machine_joystick(int x, int y);       /* the game port's stick, -32767..32767 (+x right, +y down) */
 void machine_set_speed(double s);     /* windowed: the wall clock times s */
 double machine_speed(void);
 void machine_report(void);               /* emulated time in PIT ticks (1.193182 MHz) */

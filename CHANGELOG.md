@@ -10,6 +10,15 @@ versions follow [SemVer](https://semver.org/).
   IRQ 0, and the game adds the two together.
 
 ### Added
+- The game port: an analog joystick at 201h, timed by reads as the game
+  times it, driven by the Xbox controller's left stick (the d-pad stays the
+  arrows). `--keys` takes `JX`/`JY` for scripted runs.
+- `tools/lift.py`: handler tables loaded into a variable and jumped through
+  later (`mov ax, [bx+table] / mov [var], ax ... jmp [var]`) -- the
+  joystick's per-Control-mode handlers.
+- `--mod NAME`: a folder in `mods\` laid over the game's files, read-only;
+  a mod's situations show in Open Situation.
+- `CONTRIBUTING.md`, `SECURITY.md`.
 - `tools/lift.py`: lifts `SPACESIM.EXE` and the 21 install-time data
   generators to C with pcrecomp. Finds BAO's hand-made far calls
   (`push cs / push label / push 0 / jmp far`, and the `retf` form), handler

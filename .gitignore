@@ -46,4 +46,5 @@ __pycache__/
 *.user
 *.log
 /states/
-/screenshots/
+/mods/*
+!/mods/README.md

@@ -170,6 +170,15 @@ static FILE *open_game(const char *dosname, int mode /*0 r,1 w,2 rw*/, int creat
     join(sp, sizeof sp, g_opt.savedir, b);
     join(dp, sizeof dp, g_opt.datadir, b);
     if (create) return fopen(sp, "w+b");
+    if (g_opt.moddir) {
+        /* ponytail: a mod's file opens read-only whatever the mode -- the game
+         * opens most data read/write, and copying it into game\ would outlive
+         * the mod. A write to it fails short; give the mod a copy-on-write
+         * folder of its own if one ever needs to. */
+        char mp[512]; join(mp, sizeof mp, g_opt.moddir, b);
+        FILE *f = fopen(mp, "rb");
+        if (f) { trace("[dos] %s (mod)\n", b); return f; }
+    }
     if (mode == 0) {
         FILE *f = fopen(sp, "rb");
         return f ? f : fopen(dp, "rb");
@@ -229,7 +238,9 @@ static int find_fill(void)
     const char *n = find_names[find_i++];
     char sp[512], dp[512]; struct stat st = {0};
     join(sp, sizeof sp, g_opt.savedir, n); join(dp, sizeof dp, g_opt.datadir, n);
+    if (g_opt.moddir) { char mp[512]; join(mp, sizeof mp, g_opt.moddir, n); if (stat(mp, &st) == 0) goto found; }
     if (stat(sp, &st) != 0) stat(dp, &st);
+found:
     uint8_t *d = &g_cpu.mem[seg_off(dta_seg, dta_off)];
     memset(d, 0, 43);
     d[0x15] = 0x20;
@@ -616,6 +627,7 @@ void dos_int21(CPU *c)
     case 0x4E: {
         read_asciiz(c->ds, c->dx, name, sizeof name);
         find_n = find_i = 0;
+        if (g_opt.moddir) find_scan(g_opt.moddir, base_name(name));
         find_scan(g_opt.savedir, base_name(name));
         find_scan(g_opt.datadir, base_name(name));
         trace("[dos] findfirst %s: %d\n", name, find_n);

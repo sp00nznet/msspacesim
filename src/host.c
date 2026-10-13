@@ -114,7 +114,7 @@ static void shots_due(uint64_t now)
 
 /* ---- scripted keys ----------------------------------------------------------- */
 
-typedef struct { uint64_t at; uint8_t sc; uint8_t up; int8_t state; } KeyEv;   /* state: SAVEn / LOADn */
+typedef struct { uint64_t at; uint8_t sc; uint8_t up; int8_t state; int8_t joy[2]; } KeyEv;   /* state: SAVEn / LOADn; joy: JXn / JYn, percent + 1 */
 static KeyEv kev[512];
 static int nkev, kev_i;
 
@@ -144,6 +144,13 @@ static void keys_parse(void)
             p += n; if (*p == ',') p++;
             continue;
         }
+        if ((name[0] == 'J' || name[0] == 'j') && (name[1] == 'X' || name[1] == 'x' || name[1] == 'Y' || name[1] == 'y')) {
+            KeyEv e = { at };                   /* JX-100 .. JX100: the stick, held until the next */
+            e.joy[(name[1] | 0x20) == 'y'] = (int8_t)(atoi(name + 2) + (atoi(name + 2) >= 0 ? 1 : -1));
+            kev[nkev++] = e;
+            p += n; if (*p == ',') p++;
+            continue;
+        }
         int sc = key_by_name(name);
         kev[nkev++] = (KeyEv){ at, (uint8_t)sc, 0 };
         kev[nkev++] = (KeyEv){ at + (uint64_t)(hold * PIT_HZ / 1000.0), (uint8_t)sc, 1 };
@@ -161,6 +168,15 @@ static void keys_due(void)
     while (kev_i < nkev && kev[kev_i].at <= pit_now()) {
         int sc = kev[kev_i].sc;
         if (kev[kev_i].state) { extern volatile int g_state_request; g_state_request = kev[kev_i].state; kev_i++; continue; }
+        if (kev[kev_i].joy[0] || kev[kev_i].joy[1]) {
+            static int jx, jy;
+            for (int a = 0; a < 2; a++) {
+                int j = kev[kev_i].joy[a];
+                if (j) *(a ? &jy : &jx) = (j > 0 ? j - 1 : j + 1) * 32767 / 100;
+            }
+            machine_joystick(jx, jy);
+            kev_i++; continue;
+        }
         if (ext_of(sc)) kbd_scancode(0xE0);
         kbd_scancode((uint8_t)(sc | (kev[kev_i].up ? 0x80 : 0)));
         kev_i++;
@@ -506,10 +522,11 @@ static void wave_push(const int16_t *s, int frames)
 }
 #endif
 
-/* Gamepad: an XInput pad pressed as the keys the game already knows, so it
- * works in the menus and in flight with no joystick calibration (the game's
- * own joystick, port 201h, would want calibrating each session).
- *   stick / d-pad  arrows: yaw and pitch
+/* Gamepad: an XInput pad. The left stick is the game's own analog joystick
+ * (port 201h, src/machine.c; the game centres it at startup); the rest is
+ * pressed as the keys the game already knows, so it works in the menus too.
+ *   left stick     the joystick
+ *   d-pad          arrows: yaw and pitch, and the menus
  *   RT / LT        keypad + / -: thrust up and down
  *   RB / LB        F1 / F2: the time rate
  *   A  Enter       B / Start  Esc       X  Space       Back  Tab        */
@@ -537,10 +554,14 @@ static void pad_poll(void)
 
     uint32_t now = 0;
     WORD b = s.buttons;
-    if ((b & 0x0001) || s.ly >  12000) now |= 1 << 0;   /* up */
-    if ((b & 0x0002) || s.ly < -12000) now |= 1 << 1;   /* down */
-    if ((b & 0x0004) || s.lx < -12000) now |= 1 << 2;   /* left */
-    if ((b & 0x0008) || s.lx >  12000) now |= 1 << 3;   /* right */
+    /* The left stick is the game's joystick, analog; the d-pad is the arrows,
+     * for the menus. A small dead zone, so a resting stick reads centred. */
+    int lx = abs(s.lx) < 4000 ? 0 : s.lx, ly = abs(s.ly) < 4000 ? 0 : s.ly;
+    machine_joystick(lx < -32767 ? -32767 : lx, ly < -32767 ? 32767 : -ly);
+    if (b & 0x0001) now |= 1 << 0;                       /* up */
+    if (b & 0x0002) now |= 1 << 1;                       /* down */
+    if (b & 0x0004) now |= 1 << 2;                       /* left */
+    if (b & 0x0008) now |= 1 << 3;                       /* right */
     if (s.rt > 64) now |= 1 << 4;
     if (s.lt > 64) now |= 1 << 5;
     if (b & 0x1000) now |= 1 << 6;                       /* A */

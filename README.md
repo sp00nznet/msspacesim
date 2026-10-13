@@ -23,7 +23,7 @@ harness as the other recomp repos).
 | Expanded memory (EMS 4.0) | ✅ the game's 40 pages, bank switching |
 | Menus, dialogs, keyboard | ✅ menus, the Location dialogs (deep sky, stars, planets, comets, surface), Open Situation, Arrange Windows; scripted keys in headless runs |
 | 3D models, planets, surfaces | ✅ stations, spacecraft, Mars terrain, the Milky Way (every shipped situation runs headless) |
-| Keyboard, Xbox controller | ✅ arrows for attitude, keypad +/- for thrust; the pad is mapped to the same keys |
+| Keyboard, joystick | ✅ arrows for attitude, keypad +/- for thrust; the game's own analog joystick (port 201h), driven by an Xbox controller's left stick |
 | Mouse in play | not yet verified |
 | Music and sound effects | ✅ the game runs under `SS1.EXE` as it did on DOS, and SS1's own AdLib player (lifted too) plays the music, or the engine sounds |
 | Super VGA 640×400 and 800×600 | ✅ 800×600 by default: the driver files are lifted as variants of the driver region, over a VESA 1.2 model |
@@ -40,6 +40,8 @@ On top of the original, as in the
 | Settings menu (F11) | save states, window size, scaling, speed, mute, screenshot; kept in `settings.ini` beside the exe |
 | Save states | 9 slots, the whole machine; a state loads where it was saved (in flight, from flight) |
 | Speed control | the game's clock at 0.5x, 1x, 2x or 4x real time (on top of its own time rate) |
+| Xbox controller | the left stick is the game's analog joystick, centred automatically; triggers, bumpers and buttons are mapped to keys |
+| Mods | `--mod NAME` lays `mods\NAME\` over the game: replace any file, add situations ([mods/README.md](mods/README.md)) |
 | Headless recording | `--headless --record out.mp4`: video and audio, deterministic, no window |
 
 It has been played headless and in a window on a virtual monitor; treat it as
@@ -146,7 +148,8 @@ The game uses F1–F10 and the rest of the keyboard as it always did (arrows for
 yaw and pitch, keypad + and – for thrust, F1/F2 for the time rate, Alt for the
 menus).
 
-Xbox controller: left stick or d-pad = arrows, RT / LT = thrust up / down,
+Xbox controller: left stick = the joystick (analog yaw and pitch, or whatever
+the Control mode steers), d-pad = arrows, RT / LT = thrust up / down,
 RB / LB = F1 / F2, A = Enter, B or Start = Esc, X = Space, Back = Tab.
 
 ```
@@ -155,7 +158,9 @@ spacesim [options]
   --record out.mp4    video + audio through ffmpeg
   --shot-at MS:FILE   frames at emulated times, e.g. 20000:title.bmp
   --seconds N         stop after N seconds of emulated time
-  --keys MS:KEY,...   scripted input (SAVEn / LOADn for save states)
+  --keys MS:KEY,...   scripted input (SAVEn / LOADn for save states, JX / JY
+                      -100..100 for the joystick)
+  --mod NAME          lay mods\NAME (or a folder) over the game's files
   --display MODE      scaling: sharp, smooth, crt, nearest, integer
   --fullscreen        start fullscreen
   --no-ss1            run SPACESIM.EXE without its launcher (no music)
@@ -171,6 +176,12 @@ farm: `netlab check msspacesim` (recipe `projects/msspacesim.env`) builds with
 clang-cl into `build-farm/` and runs `selftest.exe` on a test VM. The lifter and its decisions are described in
 [docs/lifting.md](docs/lifting.md); the parts and how they fit in
 [docs/architecture.md](docs/architecture.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md): no game files or anything lifted from
+them, no code from GPL emulators, and claims come with the run that shows
+them. Security reports: [SECURITY.md](SECURITY.md).
 
 ## License
 

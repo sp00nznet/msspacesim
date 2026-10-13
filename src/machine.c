@@ -89,6 +89,10 @@ void kbd_scancode(uint8_t sc)
 
 /* ---- ports ------------------------------------------------------------- */
 
+#define JOY_CENTER 1000
+static int16_t joy_pos[2];                     /* the stick, -32767..32767, from the host */
+static unsigned joy_reads;                     /* reads of 201h since the last write */
+
 int machine_port_in(uint16_t port, uint8_t *v)
 {
     switch (port) {
@@ -113,10 +117,23 @@ int machine_port_in(uint16_t port, uint8_t *v)
         return 1;
     }
     case 0x64: *v = (uint8_t)(0x14 | (kq_head != kq_tail ? 1 : 0)); return 1;
-    case 0x201: *v = 0xFF; return 1;           /* no joystick: the axis bits never fall */
+    case 0x201: {
+        /* The game times each axis's one-shot by counting reads of this port
+         * (fn_124D0, up to 4000), so the model counts reads too: an axis bit
+         * stays high for JOY_CENTER reads give or take the stick. The game
+         * takes the count it sees at startup as the centre. Axes 2 and 3 (a
+         * second stick) are open and never fall; no button is pressed. */
+        joy_reads++;
+        *v = 0xF0 | 0x0C;
+        for (int i = 0; i < 2; i++)
+            if (joy_reads <= (unsigned)(JOY_CENTER + joy_pos[i] * (JOY_CENTER - 50) / 32767)) *v |= (uint8_t)(1 << i);
+        return 1;
+    }
     }
     return 0;
 }
+
+void machine_joystick(int x, int y) { joy_pos[0] = (int16_t)x; joy_pos[1] = (int16_t)y; }
 
 int machine_port_out(uint16_t port, uint8_t v)
 {
@@ -150,7 +167,7 @@ int machine_port_out(uint16_t port, uint8_t v)
         port61 = v;
         audio_speaker((v & 3) == 3, (uint16_t)pit_div[2]);
         return 1;
-    case 0x201: return 1;
+    case 0x201: joy_reads = 0; return 1;        /* fire the one-shots */
     }
     return 0;
 }

@@ -5,6 +5,7 @@
  *
  *   --data DIR        the installed game's files (default: game)
  *   --save DIR        where writes go (default: the data folder, as on DOS)
+ *   --mod NAME        lay mods\NAME (or a folder path) over the data folder
  *   --headless        no window, no audio device; time is deterministic
  *   --realtime        headless, but run on the wall clock
  *   --record OUT.mp4  record video + audio through ffmpeg (implies nothing else;
@@ -25,6 +26,7 @@
 #include "machine.h"
 #include <setjmp.h>
 #include <stdarg.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 #include <direct.h>
 #endif
@@ -65,6 +67,7 @@ int main(int argc, char **argv)
         const char *v = (i + 1 < argc) ? argv[i + 1] : NULL;
         if (!strcmp(a, "--data") && v) { g_opt.datadir = v; i++; }
         else if (!strcmp(a, "--save") && v) { g_opt.savedir = v; i++; }
+        else if (!strcmp(a, "--mod") && v) { g_opt.moddir = v; i++; }
         else if (!strcmp(a, "--headless")) g_opt.headless = 1;
         else if (!strcmp(a, "--record") && v) { g_opt.record = v; i++; }
         else if (!strcmp(a, "--seconds") && v) { g_opt.seconds = atof(v); i++; }
@@ -95,6 +98,13 @@ int main(int argc, char **argv)
      * and the game opens nearly every data file read/write, so a copy-on-open
      * folder fills with stale copies of files it only read. */
     if (!g_opt.savedir) g_opt.savedir = g_opt.datadir;
+    if (g_opt.moddir && !strpbrk(g_opt.moddir, "/\\:")) {
+        static char mod[512]; snprintf(mod, sizeof mod, "mods/%s", g_opt.moddir); g_opt.moddir = mod;
+    }
+    if (g_opt.moddir) {
+        struct stat st;
+        if (stat(g_opt.moddir, &st) != 0 || !(st.st_mode & S_IFDIR)) { fprintf(stderr, "no mod folder %s\n", g_opt.moddir); return 2; }
+    }
     g_opt.args = tail;
     mkdirs(g_opt.savedir);
 

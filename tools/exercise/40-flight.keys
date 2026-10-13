@@ -1,4 +1,6 @@
 # Flight controls in the default situation: the arrows and keypad for
-# attitude, thrust up and down, F1/F2 for the time rate, and the views.
+# attitude, thrust up and down, F1/F2 for the time rate, the views, and the
+# joystick (JX/JY, percent of full deflection).
 # seconds 50
 10000:LEFT+800,11000:RIGHT+800,12000:UP+800,13000:DOWN+800,14000:4E+600,15000:4A+600,16000:F1,16500:F1,17000:F2,17500:F2,18000:1F,19000:20,20000:11,21000:11,22000:47+500,23000:4F+500,24000:49+500,25000:51+500,26000:52,27000:53,28000:2A+600,28100:11,29000:39,30000:ESC
+31000:JX100,32000:JX-100,33000:JX0,33500:JY100,34500:JY-100,35500:JY0

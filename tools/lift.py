@@ -444,6 +444,25 @@ def code_pointers(im, entries, bodies, codesegs, tables=False):
                 if cs * 16 + 3 <= t < seg_end(cs) and after_exit(t) and im.decode(cs, v) is not None:
                     out.add((cs, v))
 
+    def ds_table(cs, tab, bound):
+        """Near handlers in a word table at DS:tab, for code in segment cs."""
+        misses_in_row = 0
+        for k in range(bound if bound and bound <= 512 else 512):
+            p = tab + 2 * k
+            if p + 2 > len(img):
+                break
+            v = img[p] | img[p + 1] << 8
+            t = cs * 16 + v
+            if not v or not (cs * 16 + 3 <= t < seg_end(cs) and im.decode(cs, v) is not None):
+                break
+            if not bound:
+                # handlers often fall into the next one, so one entry that
+                # is not after a ret proves nothing; three in a row is text
+                misses_in_row = 0 if (after_exit(t) or t in entries) else misses_in_row + 1
+                if misses_in_row == 3:
+                    break
+            out.add((cs, v))
+
     # Indexed handler tables in the data segment: `call word ds:[eax*2+802Eh]`
     # is the SMDL model interpreter's opcode dispatch (85 handlers), and there
     # are a few more like it. DS is segment 0 for the whole program, so the
@@ -472,22 +491,26 @@ def code_pointers(im, entries, bodies, codesegs, tables=False):
                         and repr(j.op1)[-2:] in (reg, reg[0] + 'l')):
                     bound = (j.op2.disp & 0xFFFF) + 1
                     break
-            misses_in_row = 0
-            for k in range(bound if bound and bound <= 512 else 512):
-                p = tab + 2 * k
-                if p + 2 > len(img):
-                    break
-                v = img[p] | img[p + 1] << 8
-                t = cs * 16 + v
-                if not v or not (cs * 16 + 3 <= t < seg_end(cs) and im.decode(cs, v) is not None):
-                    break
-                if not bound:
-                    # handlers often fall into the next one, so one entry that
-                    # is not after a ret proves nothing; three in a row is text
-                    misses_in_row = 0 if (after_exit(t) or t in entries) else misses_in_row + 1
-                    if misses_in_row == 3:
-                        break
-                out.add((cs, v))
+            ds_table(cs, tab, bound)
+
+    # The same tables read into a variable first: `mov ax, [bx+0AE00h] /
+    # mov [0ADFEh], ax`, and elsewhere `jmp word ds:[0ADFEh]`. That is how the
+    # game picks its joystick handlers by Control mode (Rotation, Translation,
+    # MMU, ...); each pair only runs with the stick deflected in that mode.
+    jump_vars = {ins.op1.disp & 0xFFFF for body in bodies.values() for ins in body.values()
+                 if ins.mnemonic in ('call', 'jmp') and ins.op1 is not None and ins.op1.type == OpType.MEM
+                 and ins.op1.seg in ('', 'ds') and not (ins.op1.index or ins.op1.base) and ins.op1.size in (0, 2)}
+    for lin, body in bodies.items():
+        cs = entries[lin]
+        seq = [body[a] for a in sorted(body)]
+        for a, b in zip(seq, seq[1:]):
+            if (a.mnemonic == 'mov' and b.mnemonic == 'mov' and a.op1 is not None and a.op2 is not None
+                    and b.op1 is not None and b.op2 is not None
+                    and a.op1.type == OpType.REG16 and a.op2.type == OpType.MEM and a.op2.seg in ('', 'ds')
+                    and (a.op2.index or a.op2.base)
+                    and b.op1.type in (OpType.MEM, OpType.MOFFS) and b.op1.seg in ('', 'ds') and not (b.op1.index or b.op1.base)
+                    and (b.op1.disp & 0xFFFF) in jump_vars and repr(b.op2) == repr(a.op1)):
+                ds_table(cs, a.op2.disp & 0xFFFF, None)
 
     # Tables of near pointers inside a code segment, walked with lodsw/call ax
     # (the video-card probe list): runs of three or more words in bytes the
